@@ -1,0 +1,14 @@
+ARG ZMK_IMAGE=zmkfirmware/zmk-build-arm:2.5
+FROM $ZMK_IMAGE
+
+# setup user so we don't have to run as root
+ARG USER=zmkuser
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g $GID -o $USER
+RUN useradd -m -u $UID -g $GID -o -s /bin/bash $USER
+USER $USER
+WORKDIR /home/$USER
+
+RUN mkdir zmk
+WORKDIR zmk

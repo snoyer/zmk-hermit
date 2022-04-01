@@ -1,23 +1,16 @@
 import argparse
-import hashlib
-import json
-import io
+import logging
 import os
-import re
-import shlex
-import tarfile
 import tempfile
 from pathlib import Path
+from time import time
+from typing import Iterable, Optional
 
-import docker
+from .dockerstuff import VolumesMapping
+from .dockerstuff import logger as docker_logger
+from .dockerstuff import run_in_container
 
-from zmk_hermit import *
-
-
-ZMK_REPO = 'https://github.com/zmkfirmware/zmk.git'
-ZMK_IMAGE = 'zmkfirmware/zmk-build-arm:2.5'
-
-
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -26,181 +19,214 @@ def main():
         description = 'Compile out-of-tree ZMK keyboard in a Docker container.',
     )
 
-    group = parser.add_argument_group(title='Keyboard')
-    group.add_argument('shield', nargs='?',
+    parser.add_argument('shield', nargs='?',
         metavar='SHIELD', help='ZMK shield name or out-of-tree shield directory')
-    group.add_argument('board',
-        metavar='BOARD',  help='ZMK board name or out-of-tree board directory')
-    group.add_argument('--keymap',
-        metavar='FILE',  help='user keymap file')
+    parser.add_argument('board',
+        metavar='BOARD', help='ZMK board name or out-of-tree board directory')
+    parser.add_argument('--keymap',
+        metavar='FILE', help='user keymap file')
 
-
-    group = parser.add_argument_group(title='Output')
+    group = parser.add_argument_group(title='output')
+    ex = group.add_mutually_exclusive_group()
+    ex.add_argument('-l', '--left-only', action='store_true',
+        help="build only left side of split board/shield")
+    ex.add_argument('-r', '--right-only', action='store_true',
+        help="build only right side of split board/shield")
+    group.add_argument('-f', nargs='*', dest='extensions', default=['uf2'],
+        metavar='EXT', help="extension of the artefact(s) to retrieve (default: uf2)")
     group.add_argument('--into', default=tempfile.gettempdir(),
         metavar='DIR', help='directory to copy compiled .uf2 to (default: `%(default)s`)')
-    excl = group.add_mutually_exclusive_group()
-    excl.add_argument('-l', '--left-only', action='store_true',
-        help='build only left side (for split keyboards)')
-    excl.add_argument('-r', '--right-only', action='store_true',
-        help='build only right side (for split keyboards)')
+    group.add_argument('--build-dir',
+        metavar='DIR', help='directory to store build files into')
 
+    group = parser.add_argument_group(title='container and source')
+    group.add_argument('--zmk-image',
+        metavar='IMAGE', help='Docker ZMK-build image id')
+    ex = group.add_mutually_exclusive_group()
+    ex.add_argument('--zmk-git',
+        metavar='URL', help='ZMK git repository url')
+    ex.add_argument('--zmk-src',
+        metavar='DIR', help='ZMK source directory')
+    group.add_argument('--setup', action='store_true',
+        help="initialize and update build environment")
 
-    group = parser.add_argument_group(title='Container')
-    group.add_argument('--zmk-image', default=ZMK_IMAGE,
-        metavar='IMAGE', help='Docker ZMK-build image id (default: `%(default)s`)')
-    group.add_argument('--zmk-repo', default=ZMK_REPO,
-        metavar='URL', help='ZMK git repository url (default: `%(default)s`)')
+    parser.add_argument('-p', '--pristine', action='store_true',
+        help="clean build directories before starting")
+    parser.add_argument('-n', '--dry-run', action='store_true',
+        help="just print build commands; don't run them")
+    parser.add_argument('-v', '--verbose', action='store_true',
+        help="print more")
 
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.WARNING, format='%(message)s')
+    for l in (logger, docker_logger):
+        l.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     try:
-        return _main(parser.parse_args())
+        if args.setup:
+            exit_code = run_setup(args)
+            if exit_code:
+                logger.warning('failed.')
+                return exit_code
+
+        return run_build(args)
     except KeyboardInterrupt:
         return 1
 
 
-def _main(args):
+
+ZMKUSER = 'zmkuser'
+ZMKUSER_HOME = Path('/home') / ZMKUSER
+ZMK_HOME = ZMKUSER_HOME / 'zmk'
+ZMK_CONFIG = Path('/zmk-config')
+ARTEFACTS = Path('/artefacts')
+BUILD = Path('/tmp/zmk-build')
+DIR = Path(__file__).parent
 
 
-    ZMK_CONFIG = Path('/zmk-config')
-    ARTEFACTS = Path('/artefacts')
-
-    volumes = {}
-
-
-    if args.into:
-        path = Path(args.into)
-        if path.is_dir():
-            volumes[path.resolve()] = ARTEFACTS, 'rw'
-        else:
-            raise ValueError('output directory not a directory')
-
+def run_build(args: argparse.Namespace):
+    volumes: VolumesMapping = {}
 
     if args.shield:
-        path = Path(args.shield)
-        if path.is_dir():
-            shield_name = guess_shield_name(path)
-            print(f'guessed shield name `{shield_name}` from `{path}`')
-            volumes[path.resolve()] = ZMK_CONFIG / 'boards/shields' / shield_name, 'ro'
-        elif path.is_file():
-            raise ValueError()
+        shield_path = Path(args.shield)
+        if shield_path.is_dir():
+            shield_name = guess_shield_name(shield_path)
+            logger.info(f'guessed shield name `{shield_name}` from `{shield_path}`')
+            volumes[shield_path] = ZMK_CONFIG / 'boards' / 'shields' / shield_name, 'ro'
+        elif shield_path.is_file():
+            raise ValueError('out-of-tree board must be a directory')
         else:
-            shield_name = args.shield
+            shield_name = str(args.shield)
     else:
-        shield_name = args.shield
+        shield_name = None
 
-
-    if Path(args.board).is_dir():
-        raise NotImplementedError('out-of-tree boards not implemented yet')
+    if args.board:
+        board_path = Path(args.board)
+        if board_path.exists():
+            raise NotImplementedError('out-of-tree boards not implemented')
+        else:
+            board_name = str(args.board)
     else:
-        board_name = args.board
-
+        board_name = None
 
     if args.keymap:
-        path = Path(args.keymap)
-        if path.is_file():
-            volumes[path.resolve()] = ZMK_CONFIG / f'{shield_name}.keymap', 'ro'
-            keymap_name = path.stem
+        keymap_path = Path(args.keymap)
+        if keymap_path.is_file():
+            keymap_name = keymap_path.stem
+            volumes[keymap_path] = ZMK_CONFIG / f'{shield_name}.keymap', 'ro'
         else:
             raise ValueError()
     else:
         keymap_name = None
 
+    if args.zmk_src:
+        src_path = Path(args.zmk_src)
+        if src_path.is_dir():
+            volumes[src_path] = ZMK_HOME, 'rw' # may write to `zephyr/.cache`
+            dockerfile = DIR / 'Dockerfile-user-src'
+        else:
+            raise ValueError('ZMK source must be a directory')
+    else:
+        dockerfile = DIR / 'Dockerfile-default'
 
+    if args.into:
+        into_path = Path(args.into)
+        if into_path.is_dir():
+            volumes[into_path] = ARTEFACTS, 'rw'
+        else:
+            raise ValueError('output directory not a directory')
+
+    if args.build_dir:
+        build_path = Path(args.build_dir)
+        if build_path.is_dir():
+            volumes[build_path] = BUILD, 'rw'
+        else:
+            raise ValueError('build directory not a directory')
+
+    volumes[DIR / 'build.py'] = ZMKUSER_HOME / 'build.py', 'ro'
+
+    output_basename = join([shield_name, board_name, keymap_name], '-')
 
     def container_args():
-        output_name = '-'.join(filter_none(shield_name, board_name, keymap_name))
+        yield 'python3'
+        yield ZMKUSER_HOME / 'build.py'
 
-        yield from (
-            *filter_none(shield_name, board_name),
-            '--name', output_name,
-            '--zmk-config', ZMK_CONFIG,
-            '--artefacts', ARTEFACTS,
-        )
+        if shield_name:
+            yield shield_name
+        yield board_name
+
+        yield from ('--name', output_basename)
+
+        yield from ('-f', *args.extensions)
 
         if args.left_only:
             yield '--left-only'
         if args.right_only:
             yield '--right-only'
 
+        yield from (
+            '--zmk', ZMK_HOME,
+            '--config', ZMK_CONFIG,
+            '--into', ARTEFACTS,
+            '--build', BUILD,
+        )
+        if args.pristine:
+            yield '--pristine'
+        if args.dry_run:
+            yield '--dry-run'
+        if args.verbose:
+            yield '--verbose'
 
-    client = docker.from_env()
+    start_time = time()
+    exit_code = run_in_container(dockerfile, image_args(args.zmk_image, args.zmk_git), container_args(), volumes)
+    if exit_code:
+        logger.warning('failed.')
+    elif args.into:
+        for fn in Path(args.into).glob(f'{output_basename}.*'):
+            if fn.suffix.lstrip('.') in args.extensions and fn.stat().st_mtime > start_time:
+                logger.info(f'retrieved `{fn}`')
 
-    print('building image...')
-
-    image_id = build_docker_image(Path(__file__).parent,
-        buildargs = dict(
-            ZMK_IMAGE = args.zmk_image,
-            ZMK_REPO  = args.zmk_repo,
-            UID = str(os.getuid()),
-            GID = str(os.getgid()),
-        ),
-        tag = 'zmk-hermit',
-    )
+    return exit_code
 
 
-    print('running container...')
-    if volumes:
-        print('  with ' + '\n       '.join(f'`{path}` as `{bind}` ({mode})'
-                                           for path,(bind,mode) in volumes.items()))
-    print()
 
-    container = client.containers.run(image_id,
-        list(map(str, container_args())),
-        volumes = {path: dict(bind=str(bind), mode=mode) for path,(bind,mode) in volumes.items()},
-        detach = True,
-        user = os.getuid(),
-    )
-    try:
-        for line in container.logs(stream=True):
-            line = line.decode().rstrip()
-
-            # override `[xx/yy] ...` lines to limit output
-            if re.search(r'^\W*\[\d+/\d+\]', line):
-                print('\033[F\033[K', end='') # up and clear line
-
-            print(line)
-
-    except KeyboardInterrupt:
-        logger.warning('interrupted')
-    finally:
-        container.stop(timeout=1)
-        status_code = container.wait().get('StatusCode', -1)
-        print('removing container...')
-        container.remove()
-        print('done.')
-
-        return status_code
+def run_setup(args: argparse.Namespace):
+    volumes: VolumesMapping = {}
+    if args.zmk_src:
+        if args.zmk_src.is_dir():
+            volumes[args.zmk_src] = ZMK_HOME, 'rw'
+            dockerfile = DIR / 'Dockerfile-user-src'
+            cmds = 'west init -l app; west update; west zephyr-export'
+            run_in_container(dockerfile, image_args(zmk_image=args.zmk_image), ['bash', '-c', cmds], volumes)
+        else:
+            raise ValueError('ZMK source must be a directory')
 
 
 
 
-def build_docker_image(path, tag=None, client=None, buildargs=None):
-    client = docker.APIClient()
 
-    image_data = {}
+def image_args(zmk_image: Optional[str], zmk_git: Optional[str]=None):
+    if zmk_image:
+        yield 'ZMK_IMAGE', zmk_image
+    if zmk_git:
+        yield 'ZMK_GIT', zmk_git
+    yield 'UID', str(os.getuid())
+    yield 'GID', str(os.getgid())
+    yield 'USER', ZMKUSER
 
-    def output_lines():
-        for data in map(json.loads, client.build(
-                str(path),
-                buildargs = buildargs,
-                rm = True,
-                tag = tag,
-            )):
-            if 'stream' in data:
-                for line in data['stream'].splitlines():
-                    if line.startswith(' --->') or re.search(r'^Step \d+/\d+ : ', line):
-                        continue
-                    if line.strip():
-                        yield line
-            if 'aux' in data:
-                image_data['id'] = data['aux'].get('ID')
-            if 'errorDetail' in data:
-                raise IOError(data['errorDetail'].get('message'))
 
-    blockquote_lines(output_lines())
 
-    return image_data.get('id')
+def guess_shield_name(path: Path):
+    for child in path.iterdir():
+        if child.suffix == '.keymap':
+            return child.stem
+    return path.stem
 
+
+
+def join(parts: Iterable[Optional[str]], sep: str):
+    return sep.join(filter(None, parts))
 
 
 
