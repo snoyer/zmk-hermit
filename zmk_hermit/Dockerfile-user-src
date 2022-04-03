@@ -1,4 +1,4 @@
-ARG ZMK_IMAGE=zmkfirmware/zmk-build-arm:2.5
+ARG ZMK_IMAGE=zmkfirmware/zmk-build-arm:3.0
 FROM $ZMK_IMAGE
 
 # setup user so we don't have to run as root
