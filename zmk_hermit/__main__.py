@@ -194,8 +194,9 @@ def run_build(args: argparse.Namespace):
 def run_setup(args: argparse.Namespace):
     volumes: VolumesMapping = {}
     if args.zmk_src:
-        if args.zmk_src.is_dir():
-            volumes[args.zmk_src] = ZMK_HOME, 'rw'
+        src_path = Path(args.zmk_src)
+        if src_path.is_dir():
+            volumes[src_path] = ZMK_HOME, 'rw'
             dockerfile = DIR / 'Dockerfile-user-src'
             cmds = 'west init -l app; west update; west zephyr-export'
             run_in_container(dockerfile, image_args(zmk_image=args.zmk_image), ['bash', '-c', cmds], volumes)
