@@ -93,7 +93,7 @@ def run_build(args: argparse.Namespace):
         if shield_path.is_dir():
             shield_name = guess_shield_name(shield_path)
             logger.info(f'guessed shield name `{shield_name}` from `{shield_path}`')
-            volumes[shield_path] = ZMK_CONFIG / 'boards' / 'shields' / shield_name, 'ro'
+            volumes[ZMK_CONFIG / 'boards' / 'shields' / shield_name] = shield_path, 'ro'
         elif shield_path.is_file():
             raise ValueError('out-of-tree board must be a directory')
         else:
@@ -114,7 +114,7 @@ def run_build(args: argparse.Namespace):
         keymap_path = Path(args.keymap)
         if keymap_path.is_file():
             keymap_name = keymap_path.stem
-            volumes[keymap_path] = ZMK_CONFIG / f'{shield_name}.keymap', 'ro'
+            volumes[ZMK_CONFIG / f'{shield_name}.keymap'] = keymap_path, 'ro'
         else:
             raise ValueError()
     else:
@@ -123,7 +123,7 @@ def run_build(args: argparse.Namespace):
     if args.zmk_src:
         src_path = Path(args.zmk_src)
         if src_path.is_dir():
-            volumes[src_path] = ZMK_HOME, 'rw' # may write to `zephyr/.cache`
+            volumes[ZMK_HOME] = src_path, 'rw' # may write to `zephyr/.cache`
             dockerfile = DIR / 'Dockerfile-user-src'
         else:
             raise ValueError('ZMK source must be a directory')
@@ -133,18 +133,18 @@ def run_build(args: argparse.Namespace):
     if args.into:
         into_path = Path(args.into)
         if into_path.is_dir():
-            volumes[into_path] = ARTEFACTS, 'rw'
+            volumes[ARTEFACTS] = into_path, 'rw'
         else:
             raise ValueError('output directory not a directory')
 
     if args.build_dir:
         build_path = Path(args.build_dir)
         if build_path.is_dir():
-            volumes[build_path] = BUILD, 'rw'
+            volumes[BUILD] = build_path, 'rw'
         else:
             raise ValueError('build directory not a directory')
 
-    volumes[DIR / 'build.py'] = ZMKUSER_HOME / 'build.py', 'ro'
+    volumes[ZMKUSER_HOME / 'build.py'] = DIR / 'build.py', 'ro'
 
     output_basename = join([shield_name, board_name, keymap_name], '-')
 
@@ -179,7 +179,12 @@ def run_build(args: argparse.Namespace):
             yield '--verbose'
 
     start_time = time()
-    exit_code = run_in_container(dockerfile, image_args(args.zmk_image, args.zmk_git), container_args(), volumes)
+    exit_code = run_in_container(dockerfile,
+        image_args(args.zmk_image, args.zmk_git),
+        container_args(),
+        volumes = volumes,
+        tag='zmk-hermit'
+    )
     if exit_code:
         logger.warning('failed.')
     elif args.into:
@@ -196,10 +201,15 @@ def run_setup(args: argparse.Namespace):
     if args.zmk_src:
         src_path = Path(args.zmk_src)
         if src_path.is_dir():
-            volumes[src_path] = ZMK_HOME, 'rw'
+            volumes[ZMK_HOME] = src_path, 'rw'
             dockerfile = DIR / 'Dockerfile-user-src'
             cmds = 'west init -l app; west update; west zephyr-export'
-            run_in_container(dockerfile, image_args(zmk_image=args.zmk_image), ['bash', '-c', cmds], volumes)
+            run_in_container(dockerfile, 
+                image_args(zmk_image=args.zmk_image),
+                ['bash', '-c', cmds],
+                volumes = volumes,
+                tag='zmk-hermit'
+            )
         else:
             raise ValueError('ZMK source must be a directory')
 

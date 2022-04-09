@@ -5,47 +5,58 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import BinaryIO, Dict, Iterable, Literal, Tuple
+from typing import Any, BinaryIO, Iterable, Literal, Mapping, Optional, Tuple
 
 import docker
 
 logger = logging.getLogger(__name__)
 
 
-VolumesMapping = Dict[Path, Tuple[Path, Literal['ro','rw']]]
+
+VolumesMapping = Mapping[Path, Tuple[Path, Literal['ro','rw']]]
+DevicesMapping = Mapping[Path, Tuple[Path, Literal['ro','rw','rwm']]]
 
 
-def run_in_container(dockerfile: Path, image_args: Iterable[Tuple[str, str]], container_args: Iterable[str], volumes: VolumesMapping):
+def run_in_container(
+    dockerfile: Path,
+    image_args: Iterable[Tuple[str, str]],
+    container_args: Iterable[str],
+    volumes: Optional[VolumesMapping]=None,
+    devices: Optional[DevicesMapping]=None,
+    tag: Optional[str]=None,
+    **extra_run_kwargs: Any,
+):
     client = docker.from_env()
 
     logger.debug('building image...')
     image_id = build_docker_image(open(dockerfile, 'rb'),
         buildargs = dict(image_args),
-        tag = 'zmk-hermit',
+        tag = tag,
     )
 
     if logger.isEnabledFor(logging.DEBUG):
         container_args = list(container_args)
         logger.debug('running container...')
-        for path,(bind,mode) in volumes.items():
-            logger.debug(f'  using `{path}` as `{bind}` ({mode})')
-        logger.debug(f'  with args: {subprocess.list2cmdline(map(str, container_args))}')
-
-    container = client.containers.run(image_id,
-        list(map(str, container_args)),
-        volumes = {path.resolve(): dict(bind=str(bind.resolve()), mode=mode)
-                   for path, (bind, mode) in volumes.items()},
+        if volumes:
+            for bind,(path,mode) in volumes.items():
+                logger.debug(f'  using `{path}` as `{bind}` ({mode})')
+        logger.debug(f'  with args: {subprocess.list2cmdline(container_args)}')
+    
+    container = client.containers.run(
+        image = image_id,
+        command = list(map(str, container_args)),
+        volumes = format_path_mappings(volumes) if volumes else None,
+        devices = format_path_mappings(devices) if devices else None,
         user = os.getuid(),
         detach = True,
         tty = True,
+        **extra_run_kwargs
     )
     try:
         out = sys.stdout.buffer
         for b in quote_stream(container.logs(stream=True)):
             out.write(b)
             out.flush()
-    except KeyboardInterrupt:
-        logger.warning('interrupted')
     finally:
         container.stop(timeout=1)
         status_code = int(container.wait().get('StatusCode', -1))
@@ -54,8 +65,13 @@ def run_in_container(dockerfile: Path, image_args: Iterable[Tuple[str, str]], co
 
         return status_code
 
+def format_path_mappings(mapping: Mapping[Path, Tuple[Path, str]]):
+    return [f'{path.resolve()}:{bind.resolve()}:{mode}'
+                for bind,(path,mode) in mapping.items()]
 
-def build_docker_image(dockerfile: BinaryIO, tag: str, buildargs: Dict[str, str]):
+
+
+def build_docker_image(dockerfile: BinaryIO, tag: Optional[str], buildargs: Mapping[str, str]):
     client = docker.APIClient()
 
     image_id = None
@@ -68,7 +84,7 @@ def build_docker_image(dockerfile: BinaryIO, tag: str, buildargs: Dict[str, str]
     )):
         if 'stream' in data:
             for line in data['stream'].splitlines():
-                if line.startswith(' --->') or re.search(r'^Step \d+/\d+ : ', line):
+                if line.startswith(' ---> ') or re.search(r'^Step \d+/\d+ : ', line):
                     continue
                 if line.strip():
                     logger.debug(line)
@@ -82,9 +98,11 @@ def build_docker_image(dockerfile: BinaryIO, tag: str, buildargs: Dict[str, str]
 
 
 def quote_stream(stream: Iterable[bytes]):
-    yield f'╭─────┄┈\n'.encode()
-    yield from indent_stream(stream, '│ '.encode())
-    yield f'╰─────┄┈\n'.encode()
+    try:
+        yield f'\r╭─────┄┈\n'.encode()
+        yield from indent_stream(stream, '│ '.encode())
+    finally:
+        yield f'\r╰─────┄┈\n'.encode()
 
 
 def indent_stream(stream: Iterable[bytes], indent: bytes=b'| '):
