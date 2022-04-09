@@ -69,7 +69,7 @@ def main():
             )
             if shield_path:
                 logger.debug(f'found shield `{shield}` at `{shield_path}`')
-            
+
             if shield_path and guess_is_shield_split(shield_path):
                 logger.debug(f'guessing shield is split')
                 yield board, shield, 'left'
@@ -78,8 +78,8 @@ def main():
                 yield board, shield, None
         else:
             yield board, None, None
-    
-    
+
+
     for board, shield, side in items_to_compile(args.board, args.shield):
         if args.left_only and side != 'left':
             continue
@@ -105,8 +105,9 @@ def main():
             process = subprocess.Popen(west_cmd, cwd=ZMK_APP, text=True)
             process.wait()
             if process.returncode != 0:
-                raise IOError(f'build failed ({process.returncode})')
-        
+                logger.error('build failed')
+                return process.returncode
+
         for ext in args.extensions:
             temp_output = build_dir / 'zephyr' / f'zmk.{ext}'
             final_output = ARTEFACTS / join([basename, side, ext], '.')
@@ -143,7 +144,7 @@ def west_build_command(board: str, shield: Optional[str] = None,
         west_cmd += ['-s', str(app_dir)]
     if build_dir:
         west_cmd += ['-d', str(build_dir)]
-    
+
     cmake_args = [f'-D{k}={v}' for k, v in [
         ('SHIELD', shield),
         ('ZMK_CONFIG', zmk_config),
@@ -167,4 +168,4 @@ def join(parts: Iterable[Optional[str]], sep: str) -> str:
 
 
 if __name__ == '__main__':
-    main()
+    exit(main())

@@ -69,10 +69,12 @@ def main():
             if exit_code:
                 logger.warning('failed.')
                 return exit_code
-
         return run_build(args)
+    except ValueError as e:
+        logger.error(f'error: {e}')
+        return 2
     except KeyboardInterrupt:
-        return 1
+        return 130
 
 
 
@@ -185,9 +187,7 @@ def run_build(args: argparse.Namespace):
         volumes = volumes,
         tag='zmk-hermit'
     )
-    if exit_code:
-        logger.warning('failed.')
-    elif args.into:
+    if not exit_code and args.into:
         for fn in Path(args.into).glob(f'{output_basename}.*'):
             if fn.suffix.lstrip('.') in args.extensions and fn.stat().st_mtime > start_time:
                 logger.info(f'retrieved `{fn}`')
@@ -242,4 +242,4 @@ def join(parts: Iterable[Optional[str]], sep: str):
 
 
 if __name__ == '__main__':
-    main()
+    exit(main())
