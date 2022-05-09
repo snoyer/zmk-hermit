@@ -116,7 +116,8 @@ def run_build(args: argparse.Namespace):
         keymap_path = Path(args.keymap)
         if keymap_path.is_file():
             keymap_name = keymap_path.stem
-            volumes[ZMK_CONFIG / f'{shield_name}.keymap'] = keymap_path, 'ro'
+            tmp_name = shield_name or board_name
+            volumes[ZMK_CONFIG / f'{tmp_name}.keymap'] = keymap_path, 'ro'
         else:
             raise ValueError()
     else:
