@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from time import time
@@ -92,12 +93,11 @@ def run_build(args: argparse.Namespace):
 
     if args.shield:
         shield_path = Path(args.shield)
-        if shield_path.is_dir():
+        if shield_path.is_file() or shield_path.is_dir():
             shield_name = guess_shield_name(shield_path)
             logger.info(f'guessed shield name `{shield_name}` from `{shield_path}`')
-            volumes[ZMK_CONFIG / 'boards' / 'shields' / shield_name] = shield_path, 'ro'
-        elif shield_path.is_file():
-            raise ValueError('out-of-tree board must be a directory')
+            shield_dir = shield_path if shield_path.is_dir() else shield_path.parent
+            volumes[ZMK_CONFIG / 'boards' / 'shields' / shield_name] = shield_dir, 'ro'
         else:
             shield_name = str(args.shield)
     else:
@@ -105,8 +105,13 @@ def run_build(args: argparse.Namespace):
 
     if args.board:
         board_path = Path(args.board)
-        if board_path.exists():
-            raise NotImplementedError('out-of-tree boards not implemented')
+        if board_path.is_dir():
+            board_name = guess_board_name(board_path)
+            board_type = guess_board_type(board_path)
+            logger.info(f'guessed board name `{board_name}` ({board_type}) from `{board_path}`')
+            volumes[ZMK_CONFIG / 'boards' / board_type / board_name] = board_path, 'ro'
+        elif board_path.is_file():
+            raise ValueError('out-of-tree board must be a directory')
         else:
             board_name = str(args.board)
     else:
@@ -119,7 +124,7 @@ def run_build(args: argparse.Namespace):
             tmp_name = shield_name or board_name
             volumes[ZMK_CONFIG / f'{tmp_name}.keymap'] = keymap_path, 'ro'
         else:
-            raise ValueError()
+            raise ValueError('out-of-tree keymap must be a file')
     else:
         keymap_name = None
 
@@ -184,7 +189,7 @@ def run_build(args: argparse.Namespace):
     start_time = time()
     exit_code = run_in_container(dockerfile,
         image_args(args.zmk_image, args.zmk_git),
-        container_args(),
+        map(str, container_args()),
         volumes = volumes,
         tag='zmk-hermit'
     )
@@ -230,11 +235,29 @@ def image_args(zmk_image: Optional[str], zmk_git: Optional[str]=None):
 
 
 def guess_shield_name(path: Path):
-    for child in path.iterdir():
-        if child.suffix == '.keymap':
-            return child.stem
+    if path.is_dir():
+        for child in path.iterdir():
+            if child.suffix == '.keymap':
+                return child.stem
     return path.stem
 
+
+def guess_board_name(path: Path):
+    if path.is_dir():
+        for line in open(path / 'Kconfig.board'):
+            if m := re.search(r'config BOARD_(\w+)', line):
+                return m.group(1).lower()
+    raise ValueError('could not guess board name')
+
+
+def guess_board_type(path: Path):
+    if path.is_dir():
+        for child in path.glob('*_defconfig'):
+            if child.is_file():
+                for line in open(child):
+                    if m := re.search(r'CONFIG_(\w+)_MPU', line):
+                        return m.group(1).lower()
+    raise ValueError('could not guess board type')
 
 
 def join(parts: Iterable[Optional[str]], sep: str):
