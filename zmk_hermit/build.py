@@ -1,5 +1,6 @@
 import argparse
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -70,10 +71,14 @@ def main():
             if shield_path:
                 logger.debug(f'found shield `{shield}` at `{shield_path}`')
 
-            if shield_path and guess_is_shield_split(shield_path):
-                logger.debug(f'guessing shield is split')
-                yield board, shield, 'left'
-                yield board, shield, 'right'
+            if shield_path:
+                sides = guess_split_shield_sides(shield_path, shield)
+                if sides:
+                    logger.debug(f'guessing shield is split ({", ".join(sides)})')
+                    for side in sides:
+                        yield board, shield, side
+                else:
+                    yield board, shield, None
             else:
                 yield board, shield, None
         else:
@@ -121,13 +126,12 @@ def main():
 
 
 
-def guess_is_shield_split(shield_dir: Path) -> bool:
-    for child in shield_dir.iterdir():
-        if child.match('*_left.*') \
-        or child.match('*_right.*'):
-            return True
-    return False
-
+def guess_split_shield_sides(shield_path: Path, shield_name: str):
+    def find_all():
+        for line in open(shield_path / 'Kconfig.defconfig'):
+            for m in re.findall(fr'SHIELD_{shield_name}_(\w+)', line, flags=re.I):
+                yield str(m).lower()
+    return set(find_all())
 
 
 def west_build_command(board: str, shield: Optional[str] = None,
