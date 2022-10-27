@@ -5,7 +5,7 @@ import re
 import tempfile
 from pathlib import Path
 from time import time
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 from .dockerstuff import VolumesMapping
 from .dockerstuff import logger as docker_logger
@@ -25,9 +25,9 @@ def main():
     parser.add_argument('board',
         metavar='BOARD', help='ZMK board name or out-of-tree board directory')
     parser.add_argument('--keymap',
-        metavar='FILE', help='user keymap file')
+        metavar='FILE', help='out-of-tree keymap file')
 
-    group = parser.add_argument_group(title='output')
+    group = parser.add_argument_group(title='artefacts')
     ex = group.add_mutually_exclusive_group()
     ex.add_argument('-l', '--left-only', action='store_true',
         help="build only left side of split board/shield")
@@ -37,10 +37,8 @@ def main():
         metavar='EXT', help="extension of the artefact(s) to retrieve (default: uf2)")
     group.add_argument('--into', default=tempfile.gettempdir(),
         metavar='DIR', help='directory to copy compiled .uf2 to (default: `%(default)s`)')
-    group.add_argument('--build-dir',
-        metavar='DIR', help='directory to store build files into')
 
-    group = parser.add_argument_group(title='container and source')
+    group = parser.add_argument_group(title='build')
     group.add_argument('--zmk-image',
         metavar='IMAGE', help='Docker ZMK-build image id')
     ex = group.add_mutually_exclusive_group()
@@ -50,15 +48,29 @@ def main():
         metavar='DIR', help='ZMK source directory')
     group.add_argument('--setup', action='store_true',
         help="initialize and update build environment")
-
-    parser.add_argument('-p', '--pristine', action='store_true',
+    group.add_argument('--build-dir',
+        metavar='DIR', help='directory to store build files into')
+    group.add_argument('-p', '--pristine', action='store_true',
         help="clean build directories before starting")
-    parser.add_argument('-n', '--dry-run', action='store_true',
+    group.add_argument('-n', '--dry-run', action='store_true',
         help="just print build commands; don't run them")
+
+    group = parser.add_argument_group(title='firmware configuration')
+    group.add_argument('--logging', choices=['y','n'], nargs='?', const='y',
+        help="set CONFIG_ZMK_USB_LOGGING")
+    group.add_argument('--usb', choices=['y','n'], nargs='?', const='y',
+        help="set CONFIG_ZMK_USB")
+    group.add_argument('--bt', choices=['y','n'], nargs='?', const='y',
+        help="set CONFIG_ZMK_BLE")
+    group.add_argument('--max-bt', type=int,
+        metavar='N', help="set CONFIG_BT_MAX_PAIRED and CONFIG_BT_MAX_CONN")
+    group.add_argument('--kb-name',
+        help="set CONFIG_ZMK_KEYBOARD_NAME")
+
     parser.add_argument('-v', '--verbose', action='store_true',
         help="print more")
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
     logging.basicConfig(level=logging.WARNING, format='%(message)s')
     for l in (logger, docker_logger):
@@ -70,7 +82,7 @@ def main():
             if exit_code:
                 logger.warning('failed.')
                 return exit_code
-        return run_build(args)
+        return run_build(args, extra_args)
     except ValueError as e:
         logger.error(f'error: {e}')
         return 2
@@ -88,7 +100,7 @@ BUILD = Path('/tmp/zmk-build')
 DIR = Path(__file__).parent
 
 
-def run_build(args: argparse.Namespace):
+def run_build(args: argparse.Namespace, extra_args: Sequence[str]):
     volumes: VolumesMapping = {}
 
     if args.shield:
@@ -154,7 +166,27 @@ def run_build(args: argparse.Namespace):
 
     volumes[ZMKUSER_HOME / 'build.py'] = DIR / 'build.py', 'ro'
 
+    def firmware_configuration():
+        if args.logging:
+            yield f'logging={args.logging}', {'ZMK_USB_LOGGING': args.logging}
+        if args.usb:
+            yield f'usb={args.usb}', {'ZMK_USB': args.usb}
+        if args.bt:
+            yield f'bt={args.bt}', {'ZMK_BLE': args.bt}
+        if args.max_bt:
+            yield f'max-bt={args.max_bt}', {
+                'BT_MAX_PAIRED': args.max_bt,
+                'BT_MAX_CONN': args.max_bt,
+            }
+        if args.kb_name:
+            esc_kb_name = '"' + args.kb_name.replace('"','\\"') + '"'
+            yield f'name={args.kb_name}', {'ZMK_KEYBOARD_NAME': esc_kb_name}
+    
+    fw_conf = dict(firmware_configuration())
+
     output_basename = join([shield_name, board_name, keymap_name], '-')
+    if fw_conf:
+        output_basename += '[' + ','.join(fw_conf.keys()) + ']'
 
     def container_args():
         yield 'python3'
@@ -185,6 +217,12 @@ def run_build(args: argparse.Namespace):
             yield '--dry-run'
         if args.verbose:
             yield '--verbose'
+
+        for kv in fw_conf.values():
+            for k,v in kv.items():
+                yield f'-DCONFIG_{k}={v}'
+
+        yield from extra_args
 
     start_time = time()
     exit_code = run_in_container(dockerfile,
