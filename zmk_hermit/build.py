@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(
-        description = 'ZMK build helper; runs Zephyr build(s) and retrieves artefacts.',
+        description = "ZMK build helper; runs Zephyr build(s) and retrieves artefacts.",
+        epilog = "Extra arguments are passed to `west build` command."
     )
 
     parser.add_argument('shield', nargs='?',
@@ -52,7 +53,7 @@ def main():
     parser.add_argument('-v', '--verbose', action='store_true',
         help="print more")
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
     logging.basicConfig(level=logging.WARNING, format='%(message)s')
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
@@ -103,7 +104,8 @@ def main():
             app_dir=ZMK_APP,
             zmk_config=ZMK_CFG if ZMK_CFG.is_dir() else None,
             build_dir=build_dir,
-            pristine=args.pristine)
+            pristine=args.pristine,
+            extra_args=extra_args)
 
         logger.info(f'run `{subprocess.list2cmdline(west_cmd)}`')
         if not args.dry_run:
@@ -138,7 +140,8 @@ def west_build_command(board: str, shield: Optional[str] = None,
                        app_dir: Optional[Path] = None,
                        build_dir: Optional[Path] = None,
                        zmk_config: Optional[Path] = None,
-                       pristine: bool = False) -> List[str]:
+                       pristine: bool = False,
+                       extra_args: Optional[Iterable[str]]=None) -> List[str]:
     west_cmd = [
         'west', 'build',
         '-b', board,
@@ -155,6 +158,9 @@ def west_build_command(board: str, shield: Optional[str] = None,
     ] if v]
     if cmake_args:
         west_cmd += ['--', *cmake_args]
+    
+    if extra_args:
+        west_cmd += extra_args
 
     return west_cmd
 
