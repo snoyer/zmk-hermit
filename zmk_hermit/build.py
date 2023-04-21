@@ -30,7 +30,7 @@ def main():
     group.add_argument('-f', nargs='*', dest='extensions', default=['uf2'],
         metavar='EXT', help="extension of the artefact(s) to retrieve (default: uf2)")
     group.add_argument('--name', default='{shield-board}',
-        metavar='NAME', help="basename used to rename the artefact(s)")
+        metavar='NAME', help="basename used to rename the artefact(s) (default: %(default)s)")
 
     default_zmk = Path(__file__).parent.resolve()
     default_config = default_zmk.parent / 'zmk-config'
@@ -58,10 +58,24 @@ def main():
     logging.basicConfig(level=logging.WARNING, format='%(message)s')
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-    ZMK_APP = Path(args.zmk) / 'app'
+    ZMK = Path(args.zmk)
+    ZMK_APP = ZMK / 'app'
     ZMK_CFG = Path(args.config)
     ARTEFACTS = Path(args.into)
     BUILD = Path(args.build)
+
+    try:
+        check_west_cmd = ['west', '--help', 'build']
+        subprocess.check_call(check_west_cmd, cwd=ZMK_APP, text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        logger.warning('need to initalize west')
+        for west_init_cmd in [
+            ['west', 'init', '-l', ZMK_APP],
+            ['west', 'update'],
+            ['west', 'zephyr-export'],
+        ]:
+            logger.info(f'run `{subprocess.list2cmdline(west_init_cmd)}`')
+            subprocess.check_call(west_init_cmd, cwd=ZMK, text=True)
 
     def items_to_compile(board: str, shield: Optional[str]):
         if shield:
@@ -85,7 +99,6 @@ def main():
         else:
             yield board, None, None
 
-
     for board, shield, side in items_to_compile(args.board, args.shield):
         if args.left_only and side != 'left':
             continue
@@ -100,20 +113,20 @@ def main():
             'shield-board': join([shield, board], '-'),
         })
 
-        west_cmd = west_build_command(board, shield_side,
+        west_build_cmd = west_build_command(board, shield_side,
             app_dir=ZMK_APP,
             zmk_config=ZMK_CFG if ZMK_CFG.is_dir() else None,
             build_dir=build_dir,
             pristine=args.pristine,
             extra_args=extra_args)
 
-        logger.info(f'run `{subprocess.list2cmdline(west_cmd)}`')
+        logger.info(f'run `{subprocess.list2cmdline(west_build_cmd)}`')
         if not args.dry_run:
-            process = subprocess.Popen(west_cmd, cwd=ZMK_APP, text=True)
-            process.wait()
-            if process.returncode != 0:
+            try:
+                subprocess.check_call(west_build_cmd, cwd=ZMK_APP, text=True)
+            except subprocess.CalledProcessError as e:
                 logger.error('build failed')
-                return process.returncode
+                return e.returncode
 
         for ext in args.extensions:
             temp_output = build_dir / 'zephyr' / f'zmk.{ext}'
@@ -142,27 +155,26 @@ def west_build_command(board: str, shield: Optional[str] = None,
                        zmk_config: Optional[Path] = None,
                        pristine: bool = False,
                        extra_args: Optional[Iterable[str]]=None) -> List[str]:
-    west_cmd = [
-        'west', 'build',
-        '-b', board,
-        '--pristine', 'always' if pristine else 'auto',
-    ]
-    if app_dir:
-        west_cmd += ['-s', str(app_dir)]
-    if build_dir:
-        west_cmd += ['-d', str(build_dir)]
-
-    cmake_args = [f'-D{k}={v}' for k, v in [
-        ('SHIELD', shield),
-        ('ZMK_CONFIG', zmk_config),
-    ] if v]
-    if cmake_args:
-        west_cmd += ['--', *cmake_args]
+    def args():
+        yield from ('-b', board)
+        
+        yield from ('--pristine', 'always' if pristine else 'auto')
+        if app_dir:
+            yield from ('-s', str(app_dir))
+        if build_dir:
+            yield from ('-d', str(build_dir))
+        
+        if extra_args:
+            yield from extra_args
+        
+        cmake_args = [f'-D{k}={v}' for k, v in [
+            ('SHIELD', shield),
+            ('ZMK_CONFIG', zmk_config),
+        ] if v]
+        if cmake_args:
+            yield from ('--', *cmake_args)
     
-    if extra_args:
-        west_cmd += extra_args
-
-    return west_cmd
+    return ['west', 'build', *args()]
 
 
 
