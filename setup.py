@@ -6,6 +6,7 @@ setup(
     py_modules=['zmk_hermit'],
     packages=[
         'zmk_hermit',
+        'zmk_build',
     ],
     package_data={
         '': ['Dockerfile*']

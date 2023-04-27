@@ -10,5 +10,13 @@ RUN useradd -m -u $UID -g $GID -o -s /bin/bash $USER
 USER $USER
 WORKDIR /home/$USER
 
-RUN mkdir zmk
+# get ZMK
+ARG ZMK_GIT=https://github.com/zmkfirmware/zmk.git
+ARG ZMK_GIT_BRANCH=main
+RUN git clone --single-branch --branch $ZMK_GIT_BRANCH $ZMK_GIT
+
+# initialize build environment
 WORKDIR zmk
+RUN west init -l app; west update; west zephyr-export
+
+WORKDIR /home/$USER
