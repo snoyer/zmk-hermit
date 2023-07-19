@@ -1,13 +1,15 @@
 from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass, field
+from itertools import takewhile
 import json
 import logging
 from pathlib import Path
 import re
 import shutil
 from contextlib import ExitStack, contextmanager
-from typing import List, Literal, Optional, TextIO, Tuple
+import sys
+from typing import List, Literal, TextIO, Tuple
 
 from zmk_build.__main__ import main as build_main
 from zmk_build.__main__ import Directories
@@ -17,21 +19,20 @@ CMakeListsPatch = Tuple[str, Literal["before", "after"], str]
 logger = logging.getLogger(__name__)
 
 
-def main(argv: Optional[list[str]] = None):
-    parser = argparse.ArgumentParser(
-        description="Patch ZMK install and run `build.py`.",
-        epilog="Extra arguments are passed to `build.py` command.",
-    )
-
-    parser.add_argument("patch", help="patch file")
-
-    args, unknown_args = parser.parse_known_args(argv)
+def main(argv: list[str]):
+    it = iter(argv[1:])
+    args = list(takewhile(lambda a: not a.startswith("--"), it))
+    unknown_args = list(it)
 
     logging.basicConfig(level=logging.DEBUG)
 
-    patch = ZmkPatch.Load(open(args.patch, "r"))
-
     DIRECTORIES = Directories.From_args(unknown_args)
+
+    behaviors = [str(Path(a).relative_to("app")) for a in args]
+    patch = ZmkPatch(
+        behavior_c_sources=[f for f in behaviors if f.endswith(".c")],
+        behavior_dtsi_sources=[f for f in behaviors if f.endswith(".dtsi")],
+    )
 
     with patch.patch_applied(DIRECTORIES.zmk_app):
         return build_main(unknown_args)
@@ -86,13 +87,6 @@ class ZmkPatch:
     def __bool__(self):
         return bool(self.behavior_c_sources) or bool(self.behavior_dtsi_sources)
 
-    def dump(self, f: TextIO):
-        return json.dump(asdict(self), f)
-
-    @classmethod
-    def Load(cls, f: TextIO):
-        return cls(**json.load(f))
-
 
 @contextmanager
 def backedup_file(fn: Path):
@@ -108,4 +102,4 @@ def backedup_file(fn: Path):
 
 
 if __name__ == "__main__":
-    exit(main())
+    exit(main(sys.argv))

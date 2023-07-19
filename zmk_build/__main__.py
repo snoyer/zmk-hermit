@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 from .argparse_helper import ArgparseMixin, arg, mutually_exclusive, yes_no_arg
-from .zmk import CompilationItem, check_west_setup, run_west_setup, west_build_command
+from .zmk import (
+    CompilationItem,
+    check_west_setup,
+    run_west_setup,
+    run_west_update,
+    west_build_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +47,10 @@ def main(argv: Optional[list[str]] = None):
 
     if not check_west_setup(DIRS.zmk_app):
         logger.warning("need to initalize west")
-        if not MISC.dry_run:
-            run_west_setup(DIRS.zmk_app)
+        run_west_setup(DIRS.zmk_app, dry_run=MISC.dry_run)
+        run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
+    elif MISC.update_west:
+        run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
 
     extra_cmake_args = [f"-DCONFIG_{k}={v}" for k, v in FW_OPTS]
     extra_cmake_args += ["-Wno-dev"]
@@ -191,46 +199,55 @@ class Artefacts(ArgparseMixin):
 class FwOptions(ArgparseMixin):
     logging: Optional[bool]
     usb: Optional[bool]
-    bt: Optional[bool]
+    ble: Optional[bool]
     max_bt: Optional[int]
     kb_name: Optional[str]
 
     def __iter__(self):
-        return chain.from_iterable(
-            conf.items() for _name, conf in self._names_and_confs()
-        )
-
-    def __bool__(self):
-        for _ in self._names_and_confs():
-            return True
-        return False
-
-    def __str__(self):
-        return ",".join(name for name, _conf in self._names_and_confs())
-
-    def _names_and_confs(self):
         def yn(b: bool):
             return "y" if b else "n"
 
         if self.logging is not None:
-            yield f"logging={yn(self.logging)}", {"ZMK_USB_LOGGING": yn(self.logging)}
+            yield "ZMK_USB_LOGGING", yn(self.logging)
         if self.usb is not None:
-            yield f"usb={yn(self.usb)}", {"ZMK_USB": yn(self.usb)}
-        if self.bt is not None:
-            yield f"bt={yn(self.bt)}", {"ZMK_BLE": yn(self.bt)}
+            yield "ZMK_USB", yn(self.usb)
+        if self.ble is not None:
+            yield "ZMK_BLE", yn(self.ble)
         if self.max_bt:
-            yield f"max-bt={self.max_bt}", {
-                "BT_MAX_PAIRED": self.max_bt,
-                "BT_MAX_CONN": self.max_bt,
-            }
+            yield "BT_MAX_PAIRED", self.max_bt
+            yield "BT_MAX_CONN", self.max_bt
         if self.kb_name:
             esc_kb_name = '"' + self.kb_name.replace('"', '\\"') + '"'
-            yield f"name={self.kb_name}", {"ZMK_KEYBOARD_NAME": esc_kb_name}
+            yield "ZMK_KEYBOARD_NAME", esc_kb_name
+
+    def __bool__(self):
+        for _ in self:
+            return True
+        return False
+
+    def __str__(self):
+        def parts():
+            def yn(b: bool):
+                return "y" if b else "n"
+
+            if self.logging is not None:
+                yield f"logging={yn(self.logging)}"
+            if self.usb is not None:
+                yield f"usb={yn(self.usb)}"
+            if self.ble is not None:
+                yield f"ble={yn(self.ble)}"
+            if self.max_bt:
+                yield f"max-bt={self.max_bt}"
+            if self.kb_name:
+                esc_kb_name = re.sub(r"[/\\]", "_", self.kb_name)
+                yield f"name={esc_kb_name}"
+
+        return ",".join(parts())
 
     _argparse = dict(
         logging=yes_no_arg("--logging", help="set CONFIG_ZMK_USB_LOGGING"),
         usb=yes_no_arg("--usb", help="set CONFIG_ZMK_USB"),
-        bt=yes_no_arg("--bt", help="set CONFIG_ZMK_BLE"),
+        ble=yes_no_arg("--ble", help="set CONFIG_ZMK_BLE"),
         max_bt=arg(
             "--max-bt",
             type=int,
@@ -243,11 +260,17 @@ class FwOptions(ArgparseMixin):
 
 @dataclass(frozen=True)
 class Misc(ArgparseMixin):
+    update_west: bool
     pristine: bool
     dry_run: bool
     verbose: bool
 
     _argparse = dict(
+        update_west=arg(
+            "--update-west",
+            action="store_true",
+            help="update west before building",
+        ),
         pristine=arg(
             "-p",
             "--pristine",

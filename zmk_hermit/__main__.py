@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -7,12 +8,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, Iterator, List, Optional, Sequence
 
 import zmk_build
 from zmk_build.argparse_helper import ArgparseMixin, arg
 from zmk_build.zmk import guess_board_name, guess_board_type, guess_shield_name
-from zmk_hermit.patch_and_build import ZmkPatch
 
 from .dockerstuff import Volumes
 from .dockerstuff import logger as docker_logger
@@ -96,7 +96,7 @@ def run_build(
         else:
             board_name = str(kb_args.board)
     else:
-        board_name = None
+        raise ValueError("no board")
 
     if kb_args.keymap:
         keymap_path = Path(kb_args.keymap).expanduser()
@@ -118,24 +118,14 @@ def run_build(
         else:
             raise ValueError("output directory not a directory")
 
-    patch = ZmkPatch()
-
+    patch_behaviors: list[str] = []
     if zmk_args.behaviors:
-        for behavior in set(
-            HermitBehavior.From_path(Path(path).expanduser())
-            for path in zmk_args.behaviors
-        ):
-            for host_path, zmk_path in behavior.file_mapping():
-                zmk_path = ZMK_HOME / zmk_path
-                volumes[zmk_path] = host_path, "ro"
-                if zmk_path.suffix == ".c":
-                    patch.behavior_c_sources.append(
-                        str(zmk_path.relative_to(ZMK_HOME / "app"))
-                    )
-                if zmk_path.suffix == ".dtsi":
-                    patch.behavior_dtsi_sources.append(
-                        str(zmk_path.relative_to(ZMK_HOME / "app"))
-                    )
+        paths = map(Path, zmk_args.behaviors)
+        for base in set(path.with_suffix("") for path in paths):
+            for oot, proper in behavior_patch_files(base):
+                if Path(oot).is_file():
+                    volumes[ZMK_HOME / proper] = oot, "ro"
+                    patch_behaviors.append(proper)
 
     if out_args.build_dir:
         build_path = Path(out_args.build_dir)
@@ -147,17 +137,23 @@ def run_build(
     py_module_dir = Path(zmk_build.__file__).parent
     volumes[ZMKUSER_HOME / "zmk_build"] = py_module_dir, "ro"
 
-    repo = ZmkGitSource.Parse(zmk_args.zmk)
-    dockerfile = DIR / "Dockerfile"
-    image_args = docker_image_args(zmk_args.zmk_image, repo.repo, repo.branch)
+    if zmk_args.zmk and Path(zmk_args.zmk).is_dir():
+        volumes[ZMK_HOME] = Path(zmk_args.zmk).expanduser(), "rw"
+        dockerfile = DIR / "Dockerfile-local-src"
+        image_args = docker_image_args(zmk_args.zmk_image)
+    else:
+        repo = ZmkGitSource.Parse(zmk_args.zmk)
+        dockerfile = DIR / "Dockerfile-git-src"
+        image_args = docker_image_args(zmk_args.zmk_image, repo.repo, repo.branch)
 
-    def build_py_ags():
+    def build_py_ags() -> Iterator[str | Path]:
         if shield_name:
             yield shield_name
         yield board_name
 
         yield from ("--name", output_basename)
-        yield from ("-f", *out_args.extensions)
+        if out_args.extensions:
+            yield from ("-f", *out_args.extensions)
 
         yield from ("--zmk", ZMK_HOME)
         yield from ("--zmk-config", ZMK_CONFIG)
@@ -169,32 +165,24 @@ def run_build(
             yield "--verbose"
 
     start_time = time()
-    if patch:
+    if patch_behaviors:
         volumes[ZMKUSER_HOME / "patch_and_build.py"] = DIR / "patch_and_build.py", "ro"
-
-        with tempfile.NamedTemporaryFile() as tmp:
-            patch.dump(open(tmp.name, "w"))
-
-            patch_file = ZMKUSER_HOME / "patch.json"
-            build_script = ("python3", ZMKUSER_HOME / "patch_and_build.py", patch_file)
-            volumes[patch_file] = tmp.name, "ro"
-
-            exit_code = run_in_container(
-                dockerfile,
-                image_args,
-                (*build_script, *build_py_ags()),
-                volumes=volumes,
-                tag="zmk-hermit",
-            )
+        build_script = (
+            "python3",
+            ZMKUSER_HOME / "patch_and_build.py",
+            *patch_behaviors,
+            "--",
+        )
     else:
         build_script = "python3", "-m", "zmk_build"
-        exit_code = run_in_container(
-            dockerfile,
-            image_args,
-            (*build_script, *build_py_ags()),
-            volumes=volumes,
-            tag="zmk-hermit",
-        )
+
+    exit_code = run_in_container(
+        dockerfile,
+        image_args,
+        (*build_script, *build_py_ags()),
+        volumes=volumes,
+        tag="zmk-hermit",
+    )
 
     if not exit_code and out_args.into:
         into_path = Path(out_args.into).expanduser()
@@ -208,53 +196,12 @@ def run_build(
     return exit_code
 
 
-@dataclass(frozen=True)
-class HermitBehavior:
-    name: str
-    behavior_c: Path
-    dtbindings_h: Path
-    behavior_dtsi: Path
-    behavior_yaml: Path
-
-    def file_mapping(self, zmk: Path = Path("")):
-        app = zmk / "app"
-        name = self.name
-        mapping = {
-            self.behavior_c: app / f"src/behaviors/behavior_{name}.c",
-            self.dtbindings_h: app / f"include/dt-bindings/zmk/{name}.h",
-            self.behavior_dtsi: app / f"dts/behaviors/{name}.dtsi",
-            self.behavior_yaml: (
-                app / f"dts/bindings/behaviors/zmk,behavior-{name}.yaml"
-            ),
-        }
-        for actual_path, zmk_path in mapping.items():
-            if actual_path.is_file():
-                yield actual_path, zmk_path
-
-    @classmethod
-    def From_path(cls, path: Path | str):
-        if not isinstance(path, Path):
-            path = Path(path)
-
-        if not path.is_file():
-            raise ValueError(f"{path} is not a file")
-
-        dir = Path(path).parent
-        name = Path(path).stem
-
-        behavior = cls(
-            name=name,
-            behavior_c=dir / f"{name}.c",
-            dtbindings_h=dir / f"{name}.h",
-            behavior_yaml=dir / f"{name}.yaml",
-            behavior_dtsi=dir / f"{name}.dtsi",
-        )
-
-        for f in (behavior.behavior_c, behavior.behavior_yaml):
-            if not f.is_file():
-                raise ValueError(f"behavior missing {f.name}")
-
-        return behavior
+def behavior_patch_files(path: Path):
+    base, name = path.with_suffix(""), path.stem
+    yield f"{base}.c", f"app/src/behaviors/behavior_{name}.c"
+    yield f"{base}.yaml", f"app/dts/bindings/behaviors/zmk,behavior-{name}.yaml"
+    yield f"{base}.dtsi", f"app/dts/behaviors/{name}.dtsi"
+    yield f"{base}.h", f"app/include/dt-bindings/zmk/{name}.h"
 
 
 @dataclass
@@ -330,7 +277,10 @@ class ZmkArgs(ArgparseMixin):
             "--zmk",
             default="zmkfirmware:main",
             metavar="REPO",
-            help="ZMK git repository, eg. github-user:branch (default: `%(default)s`)",
+            help=(
+                "ZMK git repository (github-user:branch) or ZMK source directory"
+                " (default: `%(default)s`)"
+            ),
         ),
         zmk_image=arg(
             "--zmk-image",

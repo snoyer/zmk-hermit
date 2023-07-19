@@ -3,7 +3,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class CompilationItem:
 
     @property
     def zmk_shield(self):
-        """valid zmk shield name, with `_side` prefix for splip shields,
+        """valid zmk shield name, with `_side` prefix for split shields,
         eg. `corne_left`"""
         if self.shield_name and self.shield_side:
             return f"{self.shield_name}_{self.shield_side}"
@@ -110,20 +110,28 @@ def check_west_setup(zmk_app: Path):
         return True
     except subprocess.CalledProcessError:
         return False
+    except FileNotFoundError:
+        return False
 
 
-def run_west_setup(zmk_app: Path):
-    for west_init_cmd, error_ok in [
-        (["west", "init", "-l", zmk_app], True),
-        (["west", "update"], False),
-        (["west", "zephyr-export"], False),
-    ]:
-        logger.info(f"run `{subprocess.list2cmdline(west_init_cmd)}`")
-        try:
+def run_west_setup(zmk_app: Path, dry_run:bool=False):
+    west_init_cmd = ["west", "init", "-l", zmk_app]
+    logger.info(f"run `{subprocess.list2cmdline(west_init_cmd)}`")
+    try:
+        if not dry_run:
             subprocess.check_call(west_init_cmd, cwd=zmk_app, text=True)
-        except subprocess.CalledProcessError:
-            if not error_ok:
-                raise
+    except subprocess.CalledProcessError:
+        pass
+
+
+def run_west_update(zmk_app: Path, dry_run:bool=False):
+    for west_update_cmd in [
+        ["west", "update"],
+        ["west", "zephyr-export"],
+    ]:
+        logger.info(f"run `{subprocess.list2cmdline(west_update_cmd)}`")
+        if not dry_run:
+            subprocess.check_call(west_update_cmd, cwd=zmk_app, text=True)
 
 
 def west_build_command(
@@ -137,7 +145,7 @@ def west_build_command(
     extra_args: Optional[Iterable[str]] = None,
     extra_cmake_args: Optional[Iterable[str]] = None,
 ) -> List[str]:
-    def args():
+    def args() -> Iterator[str]:
         yield from ("-b", board)
 
         yield from ("--pristine", "always" if pristine else "auto")
