@@ -1,6 +1,6 @@
 # ZMK hermit
 
-Compile out-of-tree ZMK keyboards.
+Compile ZMK firmware with out-of-tree boards, shields, keymaps, or behaviors; inside a Docker container.
 
 ## Method
 
@@ -9,72 +9,43 @@ Compile out-of-tree ZMK keyboards.
 
 Basically a local equivalent of the Github workflow but based on command-line rather that files/directory structure.
 
+## `zmk_build`
 
-## Example
+This Python package contains utility functions to analyze ZMK shield and board directories and generate `west build` commands, as well as a command line tool to run them.
 
-```bash
-zmk-hermit ~/my-split-kb/zmk-shield/ nice_nano_v2 --keymap ~/my-keymaps/qwerty1.keymap --zmk-src ~/my-zmk-fork --into /tmp -v
-```
-will output (slightly truncated):
-```
-guessed shield name `my_split_kb` from `/home/user/my-split-kb/zmk-shield`
-building image...
-Successfully built c093ea715a57
-Successfully tagged zmk-hermit:latest
-running container...
-  using `/tmp` as `/artefacts` (rw)
-  using `/home/user/my-split-kb/zmk-shield` as `/zmk-config/boards/shields/my_split_kb` (rw)
-  using `/home/user/my-keymaps/qwerty1.keymap` as `/zmk-config/my_split_kb.keymap` (ro)
-  using `/home/user/my-zmk-fork` as `/home/zmkuser/zmk` (ro)
-  with args: python3 build.py my_split_kb nice_nano_v2 --name my_split_kb-nice_nano_v2-qwerty1 -f uf2 --zmk /home/zmkuser/zmk --config /zmk-config --into /artefacts --build /tmp/zmk-build --verbose
-╭─────┄┈
-│ found shield `my_split_kb` at `/zmk-config/boards/shields/my_split_kb`
-│ guessing shield is split
-│ run `west build -b nice_nano_v2 --pristine auto -d /tmp/zmk-build/my_split_kb_left-nice_nano_v2 -- -DSHIELD=my_split_kb_left -DZMK_CONFIG=/zmk-config`
-│ -- west build: generating a build system
-│ -- Adding ZMK config directory as board root: /zmk-config
-│ -- ZMK Config directory: /zmk-config
-│ -- Board: nice_nano_v2, /home/zmkuser/zmk/app/boards/arm/nice_nano, my_split_kb_left, my_split_kb
-│ -- Using keymap file: /zmk-config/my_split_kb.keymap
-...
-│ -- Build files have been written to: /tmp/zmk-build/my_split_kb_left-nice_nano_v2
-│ -- west build: building application
-│ [1/260] Preparing syscall dependency handling
-│ 
-│ [260/260] Linking C executable zephyr/zmk.elf
-│ Memory region         Used Size  Region Size  %age Used
-│            FLASH:      152701 B       792 KB     18.83%
-│             SRAM:       38495 B       256 KB     14.68%
-│         IDT_LIST:          0 GB         2 KB      0.00%
-│ Converted to uf2, output size: 305664, start address: 0x26000
-│ Wrote 305664 bytes to /tmp/zmk-build/my_split_kb_left-nice_nano_v2/zephyr/zmk.uf2
-│ copy `/tmp/zmk-build/my_split_kb_left-nice_nano_v2/zephyr/zmk.uf2` to `/artefacts/my_split_kb-nice_nano_v2-qwerty1.left.uf2`
-│ run `west build -b nice_nano_v2 --pristine auto -d /tmp/zmk-build/my_split_kb_right-nice_nano_v2 -- -DSHIELD=my_split_kb_right -DZMK_CONFIG=/zmk-config`
-│ -- west build: generating a build system
-│ -- Adding ZMK config directory as board root: /zmk-config
-│ -- ZMK Config directory: /zmk-config
-│ -- Board: nice_nano_v2, /home/zmkuser/zmk/app/boards/arm/nice_nano, my_split_kb_right, my_split_kb
-│ -- Using keymap file: /zmk-config/my_split_kb.keymap
-...
-│ -- Build files have been written to: /tmp/zmk-build/my_split_kb_right-nice_nano_v2
-│ -- west build: building application
-│ [1/283] Preparing syscall dependency handling
-│ 
-│ [283/283] Linking C executable zephyr/zmk.elf
-│ Memory region         Used Size  Region Size  %age Used
-│            FLASH:      201644 B       792 KB     24.86%
-│             SRAM:       60035 B       256 KB     22.90%
-│         IDT_LIST:          0 GB         2 KB      0.00%
-│ Converted to uf2, output size: 403456, start address: 0x26000
-│ Wrote 403456 bytes to /tmp/zmk-build/my_split_kb_right-nice_nano_v2/zephyr/zmk.uf2
-│ copy `/tmp/zmk-build/my_split_kb_right-nice_nano_v2/zephyr/zmk.uf2` to `/artefacts/my_split_kb-nice_nano_v2-qwerty1.right.uf2`
-╰─────┄┈
-removed container.
-retrieved `/tmp/my_split_kb-nice_nano_v2-qwerty1.right.uf2`
-retrieved `/tmp/my_split_kb-nice_nano_v2-qwerty1.left.uf2`
-```
-The compiled files `my_split_kb-nice_nano_v2-qwerty1.left.uf2` and `my_split_kb-nice_nano_v2-qwerty1.right.uf2` are copied into `/tmp`.
+For example:
 
+```sh
+python -m zmk_build
+  corne  # shield
+  nice_nano_v2  # board
+  --into ~/  # copy compiled firmware to home directory
+  --left-only  # only do left side
+  --with-logging  # activate usb logging
+  --with-kb-name "corne2"  # set device name
+  --dry-run  # don't actually do it, just print for the readme :)
+```
+```
+found shield `corne` at `app/boards/shields/corne`
+guessing shield is split (`left`, `right`)
+would run `west build -b nice_nano_v2 --pristine auto -s app -d /tmp/zmk-build/corne_left-nice_nano_v2 -- -DSHIELD=corne_left -DCONFIG_KERNEL_BIN_NAME=\"corne-nice_nano_v2.left\" -DCONFIG_ZMK_USB_LOGGING=y -DCONFIG_ZMK_KEYBOARD_NAME=\"debug_corne\" -Wno-dev`
+would copy `/tmp/zmk-build/corne_left-nice_nano_v2/zephyr/corne-nice_nano_v2.left.uf2` to `~/corne-nice_nano_v2[logging=y,name=debug_corne].left.uf2`
+not building `right` side (`left` only)
+```
+
+
+## `zmk_hermit`
+
+This Python package contains provides a command line tool to set up a Docker container in which to run `zmk_build`.
+It takes care of mounting out-of-tree boards, shields, and behaviors appropriately in the `zmk-config` folder inside the container before running the build, as well as retrieving the artefacts afterwards.
+
+```sh
+python -m zmk_hermit
+  ~/my-split-kb/zmk-shield/  # out-of-tree shield
+  nice_nano_v2  # board
+  --keymap ~/my-keymaps/qwerty1.keymap  # out-of-tree keymap
+  --into ~/  # copy compiled firmware to home directory
+```
 
 
 ## Disclaimer

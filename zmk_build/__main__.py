@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, Optional
 
 from .argparse_helper import ArgparseMixin, arg, mutually_exclusive, yes_no_arg
 from .zmk import (
@@ -42,11 +42,14 @@ def main(argv: Optional[list[str]] = None):
     ARTEFACTS = Artefacts.From_parsed_args(args)
     MISC = Misc.From_parsed_args(args)
 
-    logging.basicConfig(level=logging.WARNING, format="%(message)s")
-    logger.setLevel(logging.DEBUG if MISC.verbose else logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG if MISC.verbose else logging.INFO, format="%(message)s"
+    )
 
     if not check_west_setup(DIRS.zmk_app):
-        logger.warning("need to initalize west")
+        logger.log(
+            logging.DEBUG if MISC.dry_run else logging.WARNING, "need to initalize west"
+        )
         run_west_setup(DIRS.zmk_app, dry_run=MISC.dry_run)
         run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
     elif MISC.update_west:
@@ -55,34 +58,49 @@ def main(argv: Optional[list[str]] = None):
     extra_cmake_args = [f"-DCONFIG_{k}={v}" for k, v in FW_OPTS]
     extra_cmake_args += ["-Wno-dev"]
 
+    extra_args: list[str] = []
+    for unknown_arg in unknown_args:
+        if unknown_arg.startswith("-D"):
+            extra_cmake_args.append(unknown_arg)
+        else:
+            extra_args.append(unknown_arg)
+
     shield_dirs = [
         DIRS.zmk_config / "boards" / "shields",
         DIRS.zmk_app / "boards" / "shields",
     ]
     for item in CompilationItem.Find(
-        SHIELD_BOARD.board, SHIELD_BOARD.shield, shield_dirs
+        SHIELD_BOARD.board, SHIELD_BOARD.primary_shield, shield_dirs
     ):
         if ARTEFACTS.left_only and item.shield_side != "left":
+            logger.info(f'not building `{item.shield_side}` side (`left` only)')
             continue
         if ARTEFACTS.right_only and item.shield_side != "right":
+            logger.info(f'not building `{item.shield_side}` side (`right` only)')
             continue
 
         build_dir = DIRS.build / join([item.zmk_shield, item.zmk_board], "-")
-        bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
+        tmp_bin_name = item.filename(alias=ARTEFACTS.name)
+        final_bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
 
+        shields = (
+            [item.zmk_shield, *SHIELD_BOARD.secondary_shields]
+            if item.zmk_shield
+            else []
+        )
         west_build_cmd = west_build_command(
             item.zmk_board,
-            item.zmk_shield,
+            shields,
             app_dir=DIRS.zmk_app,
             zmk_config=DIRS.zmk_config if DIRS.zmk_config.is_dir() else None,
             build_dir=build_dir,
-            bin_name=bin_name,
+            bin_name=tmp_bin_name,
             pristine=MISC.pristine,
-            extra_args=unknown_args,
+            extra_args=extra_args,
             extra_cmake_args=extra_cmake_args,
         )
-
-        logger.info(f"run `{subprocess.list2cmdline(west_build_cmd)}`")
+        action = "would run" if MISC.dry_run else "run"
+        logger.info(f"{action} `{subprocess.list2cmdline(west_build_cmd)}`")
         if not MISC.dry_run:
             try:
                 subprocess.check_call(west_build_cmd, cwd=DIRS.zmk_app, text=True)
@@ -91,10 +109,11 @@ def main(argv: Optional[list[str]] = None):
                 return e.returncode
 
         for ext in ARTEFACTS.extensions:
-            temp_output = build_dir / "zephyr" / f"{bin_name}.{ext}"
-            final_output = ARTEFACTS.directory / f"{bin_name}.{ext}"
+            temp_output = build_dir / "zephyr" / f"{tmp_bin_name}.{ext}"
+            final_output = ARTEFACTS.directory / f"{final_bin_name}.{ext}"
 
-            logger.info(f"copy `{temp_output}` to `{final_output}`")
+            action = "would copy" if MISC.dry_run else "copy"
+            logger.info(f"{action} `{temp_output}` to `{final_output}`")
             if not MISC.dry_run:
                 if temp_output.is_file():
                     shutil.copy(temp_output, final_output)
@@ -104,11 +123,19 @@ def main(argv: Optional[list[str]] = None):
 
 @dataclass(frozen=True)
 class ShieldBoard(ArgparseMixin):
-    shield: Optional[str]
+    shields: list[str]
     board: str
 
+    @property
+    def primary_shield(self):
+        return self.shields[0] if self.shields else None
+
+    @property
+    def secondary_shields(self):
+        return self.shields[1:]
+
     _argparse = dict(
-        shield=arg(nargs="?", metavar="SHIELD", help="shield name"),
+        shields=arg(nargs="*", metavar="SHIELD", help="shield names"),
         board=arg(metavar="BOARD", help="board name"),
     )
 
@@ -123,6 +150,7 @@ class Directories(ArgparseMixin):
     def zmk_app(self):
         return self.zmk / "app"
 
+    _argparse_suffix = "-dir"
     _argparse = dict(
         zmk=arg(
             "--zmk",
@@ -154,7 +182,7 @@ class Artefacts(ArgparseMixin):
     right_only: bool
     directory: Path
     name: str
-    extensions: List[str]
+    extensions: list[str]
 
     _argparse = (
         mutually_exclusive(
@@ -203,6 +231,8 @@ class FwOptions(ArgparseMixin):
     max_bt: Optional[int]
     kb_name: Optional[str]
 
+    _argparse_prefix = "with-"
+
     def __iter__(self):
         def yn(b: bool):
             return "y" if b else "n"
@@ -217,13 +247,11 @@ class FwOptions(ArgparseMixin):
             yield "BT_MAX_PAIRED", self.max_bt
             yield "BT_MAX_CONN", self.max_bt
         if self.kb_name:
-            esc_kb_name = '"' + self.kb_name.replace('"', '\\"') + '"'
-            yield "ZMK_KEYBOARD_NAME", esc_kb_name
+            escaped_kb_name = self.kb_name.replace('"', '\\"')
+            yield "ZMK_KEYBOARD_NAME", f'"{escaped_kb_name}"'
 
     def __bool__(self):
-        for _ in self:
-            return True
-        return False
+        return any(self)
 
     def __str__(self):
         def parts():

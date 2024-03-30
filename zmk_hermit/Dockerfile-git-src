@@ -1,4 +1,4 @@
-ARG ZMK_IMAGE=zmkfirmware/zmk-build-arm:3.2
+ARG ZMK_IMAGE
 FROM $ZMK_IMAGE
 
 # setup user so we don't have to run as root
@@ -12,9 +12,9 @@ WORKDIR /home/$USER
 
 
 # get ZMK
-ARG ZMK_GIT=https://github.com/zmkfirmware/zmk.git
-ARG ZMK_GIT_BRANCH=main
-RUN git clone --single-branch --branch $ZMK_GIT_BRANCH $ZMK_GIT
+ARG ZMK_GIT
+ARG ZMK_GIT_BRANCH
+RUN git clone $ZMK_GIT --single-branch --branch $ZMK_GIT_BRANCH
 
 # initialize build environment
 WORKDIR zmk

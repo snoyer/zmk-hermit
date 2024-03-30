@@ -25,7 +25,7 @@ class arg:
         _dump: Optional[Callable[[Any], str]] = None,
     ) -> None:
         if not all(x.startswith("-") for x in option_strings):
-            self.option_strings: tuple[str] = tuple()
+            self.option_strings: tuple[str, ...] = tuple()
         else:
             self.option_strings = option_strings
 
@@ -69,6 +69,8 @@ class mutually_exclusive(Dict[str, arg]):
 
 class ArgparseMixin:
     _argparse: dict[str, arg] | Sequence[dict[str, arg]]
+    _argparse_prefix: str = ""
+    _argparse_suffix: str = ""
 
     @classmethod
     def From_args(cls, args: list[str]):
@@ -110,26 +112,36 @@ class ArgparseMixin:
                 add_to = parser
 
             for attr_name, arg in argparse_group.items():
+                args = arg.option_strings
+                if cls._argparse_prefix or cls._argparse_suffix:
+                    args = [
+                        re.sub(
+                            r"^--(.+)",
+                            rf"--{cls._argparse_prefix}\1{cls._argparse_suffix}",
+                            arg,
+                        )
+                        for arg in args
+                    ]
                 kwargs = arg.kwargs(dest=attr_name)
                 kwargs["dest"] = cls._prefix_dest(attr_name)
                 try:
-                    add_to.add_argument(*arg.option_strings, **kwargs)
+                    add_to.add_argument(*args, **kwargs) #type: ignore
                 except TypeError as e:
                     if re.search(r"unexpected.*metavar", str(e)):
                         kwargs.pop("metavar")
-                        add_to.add_argument(*arg.option_strings, **kwargs)
+                        add_to.add_argument(*args, **kwargs) #type: ignore
                     else:
                         raise
 
     @classmethod
-    def _argparse_groups(cls):
+    def _argparse_groups(cls) -> Sequence[dict[str, arg]]:
         if isinstance(cls._argparse, dict):
             return [cls._argparse]
         else:
             return cls._argparse
 
     @classmethod
-    def _argparse_args(cls):
+    def _argparse_args(cls) -> Iterable[tuple[str, arg]]:
         for group in cls._argparse_groups():
             yield from group.items()
 
@@ -152,7 +164,7 @@ def yes_no_arg(*option_strings: str, help: str):
         choices=["yes", "no", "y", "n"],
         nargs="?",
         const="y",
-        metavar="Yes/no",
+        metavar="yes/no",
         _parse=yn_to_bool,
         _dump=yn_from_bool,
     )

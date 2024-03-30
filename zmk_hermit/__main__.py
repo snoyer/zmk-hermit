@@ -8,15 +8,15 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
-from typing import Iterable, Iterator, List, Optional, Sequence
+from typing import Iterable, Iterator, Optional, Sequence
 
 import zmk_build
 from zmk_build.argparse_helper import ArgparseMixin, arg
 from zmk_build.zmk import guess_board_name, guess_board_type, guess_shield_name
 
-from .dockerstuff import Volumes
+from .dockerstuff import Volumes, run_in_container
 from .dockerstuff import logger as docker_logger
-from .dockerstuff import run_in_container
+from .modular_behaviors import ModularBehaviorsShieldFiles
 
 logger = logging.getLogger(__name__)
 
@@ -70,17 +70,22 @@ def run_build(
         else:
             raise ValueError("zmk-config must be a directory")
 
-    if kb_args.shield:
-        shield_path = Path(kb_args.shield).expanduser()
+    shield_names: list[str] = []
+    for shield in kb_args.shields:
+        shield_path = Path(shield).expanduser()
         if shield_path.is_file() or shield_path.is_dir():
-            shield_name = guess_shield_name(shield_path)
-            logger.info(f"guessed shield name `{shield_name}` from `{shield_path}`")
+            primary_shield_name = guess_shield_name(shield_path)
+            logger.info(
+                f"guessed shield name `{primary_shield_name}` from `{shield_path}`"
+            )
             shield_dir = shield_path if shield_path.is_dir() else shield_path.parent
-            volumes[ZMK_CONFIG / "boards" / "shields" / shield_name] = shield_dir, "ro"
+            volumes[ZMK_CONFIG / "boards" / "shields" / primary_shield_name] = (
+                shield_dir,
+                "ro",
+            )
+            shield_names.append(primary_shield_name)
         else:
-            shield_name = str(kb_args.shield)
-    else:
-        shield_name = None
+            shield_names.append(str(shield))
 
     if kb_args.board:
         board_path = Path(kb_args.board).expanduser()
@@ -98,18 +103,20 @@ def run_build(
     else:
         raise ValueError("no board")
 
+    primary_shield_name = shield_names[0] if shield_names else None
+
     if kb_args.keymap:
         keymap_path = Path(kb_args.keymap).expanduser()
         if keymap_path.is_file():
             keymap_name = keymap_path.stem
-            tmp_name = shield_name or board_name
+            tmp_name = primary_shield_name or board_name
             volumes[ZMK_CONFIG / f"{tmp_name}.keymap"] = keymap_path, "ro"
         else:
             raise ValueError("out-of-tree keymap must be a file")
     else:
         keymap_name = None
 
-    output_basename = join([shield_name, board_name, keymap_name], "-")
+    output_basename = join([primary_shield_name, board_name, keymap_name], "-")
 
     if out_args.into:
         into_path = Path(out_args.into).expanduser()
@@ -118,14 +125,21 @@ def run_build(
         else:
             raise ValueError("output directory not a directory")
 
-    patch_behaviors: list[str] = []
+    modular_behaviors_shield_files = None
     if zmk_args.behaviors:
-        paths = map(Path, zmk_args.behaviors)
-        for base in set(path.with_suffix("") for path in paths):
-            for oot, proper in behavior_patch_files(base):
-                if Path(oot).is_file():
-                    volumes[ZMK_HOME / proper] = oot, "ro"
-                    patch_behaviors.append(proper)
+        behavior_shield_name = "zmk_hermit_behaviors"
+        logger.debug(
+            f"creating `{behavior_shield_name}` shield to hold extra behavior sources"
+        )
+        shield_names.append(behavior_shield_name)
+
+        behavior_shield = ZMK_CONFIG / "boards" / "shields" / behavior_shield_name
+
+        modular_behaviors_shield_files = ModularBehaviorsShieldFiles(
+            map(Path, zmk_args.behaviors), behavior_shield
+        )
+        for contents, path_in_shield in modular_behaviors_shield_files:
+            volumes[path_in_shield] = contents, "ro"
 
     if out_args.build_dir:
         build_path = Path(out_args.build_dir)
@@ -135,7 +149,8 @@ def run_build(
             raise ValueError("build directory not a directory")
 
     py_module_dir = Path(zmk_build.__file__).parent
-    volumes[ZMKUSER_HOME / "zmk_build"] = py_module_dir, "ro"
+    volumes[ZMKUSER_HOME / "py_zmk_build"] = py_module_dir, "ro"
+    build_script = "python3", "-m", "py_zmk_build"
 
     if zmk_args.zmk and Path(zmk_args.zmk).is_dir():
         volumes[ZMK_HOME] = Path(zmk_args.zmk).expanduser(), "rw"
@@ -147,34 +162,23 @@ def run_build(
         image_args = docker_image_args(zmk_args.zmk_image, repo.repo, repo.branch)
 
     def build_py_ags() -> Iterator[str | Path]:
-        if shield_name:
-            yield shield_name
+        yield from shield_names
         yield board_name
 
         yield from ("--name", output_basename)
         if out_args.extensions:
             yield from ("-f", *out_args.extensions)
-
-        yield from ("--zmk", ZMK_HOME)
-        yield from ("--zmk-config", ZMK_CONFIG)
         yield from ("--into", ARTEFACTS)
-        yield from ("--build", BUILD)
+
+        yield from ("--zmk-dir", ZMK_HOME)
+        yield from ("--zmk-config-dir", ZMK_CONFIG)
+        yield from ("--build-dir", BUILD)
         yield from extra_args
 
         if out_args.verbose:
             yield "--verbose"
 
     start_time = time()
-    if patch_behaviors:
-        volumes[ZMKUSER_HOME / "patch_and_build.py"] = DIR / "patch_and_build.py", "ro"
-        build_script = (
-            "python3",
-            ZMKUSER_HOME / "patch_and_build.py",
-            *patch_behaviors,
-            "--",
-        )
-    else:
-        build_script = "python3", "-m", "zmk_build"
 
     exit_code = run_in_container(
         dockerfile,
@@ -193,27 +197,27 @@ def run_build(
             ):
                 logger.info(f"retrieved `{out_args.into/ fn.name}`")
 
+    if modular_behaviors_shield_files:
+        for temp_path in modular_behaviors_shield_files.temp_files:
+            try:
+                temp_path.unlink()
+                logger.debug(f"removed temporary file `{temp_path}`")
+            except IOError:
+                logger.warning(f"could not remove temporary file `{temp_path}`")
+
     return exit_code
-
-
-def behavior_patch_files(path: Path):
-    base, name = path.with_suffix(""), path.stem
-    yield f"{base}.c", f"app/src/behaviors/behavior_{name}.c"
-    yield f"{base}.yaml", f"app/dts/bindings/behaviors/zmk,behavior-{name}.yaml"
-    yield f"{base}.dtsi", f"app/dts/behaviors/{name}.dtsi"
-    yield f"{base}.h", f"app/include/dt-bindings/zmk/{name}.h"
 
 
 @dataclass
 class KbArgs(ArgparseMixin):
-    shield: str
+    shields: list[str]
     board: str
     keymap: Optional[str]
     zmk_config: Path
 
     _argparse = dict(
-        shield=arg(
-            nargs="?",
+        shields=arg(
+            nargs="*",
             metavar="SHIELD",
             help="ZMK shield name or out-of-tree shield directory",
         ),
@@ -261,7 +265,7 @@ class OutputArgs(ArgparseMixin):
 
 @dataclass
 class ZmkArgs(ArgparseMixin):
-    behaviors: List[str]
+    behaviors: list[str]
     zmk: str
     zmk_image: str
 
@@ -271,7 +275,7 @@ class ZmkArgs(ArgparseMixin):
             "--behaviors",
             nargs="+",
             metavar="FILE",
-            help="out-of-tree behavior file(s)",
+            help="out-of-tree behavior files",
         ),
         zmk=arg(
             "--zmk",
@@ -284,7 +288,7 @@ class ZmkArgs(ArgparseMixin):
         ),
         zmk_image=arg(
             "--zmk-image",
-            default="zmkfirmware/zmk-build-arm:3.2",
+            default="zmkfirmware/zmk-build-arm:3.5",
             metavar="IMAGE",
             help="Docker ZMK-build image id (default: `%(default)s`)",
         ),
