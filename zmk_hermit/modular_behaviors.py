@@ -8,18 +8,20 @@ def modular_behaviors_shield_contents(behavior_files: Iterable[Path], shield_dir
     behavior_files = list(behavior_files)
     shield_name = re.sub(r"\W", "_", shield_dir.name)
 
-    # new `.overlay`` and `Kconfig.shield` files needed for the shield to be valid
+    # new `.overlay` and `Kconfig.shield` files needed for the shield to be valid
     yield shield_dir / f"{shield_name}.overlay", [""]
-    yield shield_dir / "Kconfig.shield", [
+    Kconfig = [
         f"config SHIELD_{shield_name.upper()}",
         f"   def_bool $(shields_list_contains,{shield_name})",
     ]
+    yield (shield_dir / "Kconfig.shield", Kconfig)
 
     # new `CMakeLists.txt` file needed to include each behavior's `.cmake` file
-    yield shield_dir / "CMakeLists.txt", [
+    CMakeLists = [
         "target_include_directories(app PRIVATE ${CMAKE_SOURCE_DIR}/include)",
         *(f"include({f.name})" for f in behavior_files if f.suffix == ".cmake"),
     ]
+    yield (shield_dir / "CMakeLists.txt", CMakeLists)
 
     # existing source files are relocated
     for behavior_file in behavior_files:

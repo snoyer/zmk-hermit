@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, BinaryIO, Iterable, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, BinaryIO, Iterable, Literal, Mapping
 
 import docker
 
@@ -13,17 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 VolumeMode = Literal["ro", "rw"]
-VolumesMapping = dict[Path, Tuple[Path, VolumeMode]]
+VolumesMapping = dict[Path, tuple[Path, VolumeMode]]
 DeviceMode = Literal["ro", "rw", "rwm"]
-DevicesMapping = dict[Path, Tuple[Path, DeviceMode]]
+DevicesMapping = dict[Path, tuple[Path, DeviceMode]]
 
-PathLike = Union[Path, str]
+PathLike = Path | str
+
 
 class Volumes(VolumesMapping):
     def __setitem__(
         self,
         key: PathLike,
-        value: Union[Tuple[PathLike, VolumeMode], PathLike],
+        value: tuple[PathLike, VolumeMode] | PathLike,
     ):
         if isinstance(value, tuple):
             path, mode = value[:2]
@@ -34,11 +35,11 @@ class Volumes(VolumesMapping):
 
 def run_in_container(
     dockerfile: Path,
-    image_args: Iterable[Tuple[str, str]],
+    image_args: Iterable[tuple[str, str]],
     container_args: Iterable[Any],
-    volumes: Optional[VolumesMapping] = None,
-    devices: Optional[DevicesMapping] = None,
-    tag: Optional[str] = None,
+    volumes: VolumesMapping | None = None,
+    devices: DevicesMapping | None = None,
+    tag: str | None = None,
     **extra_run_kwargs: Any,
 ):
     client = docker.from_env()
@@ -107,7 +108,7 @@ def resolve_mappings_overlaps(volumes: VolumesMapping):
     return volumes_copy
 
 
-def format_path_mappings(mapping: Mapping[Path, Tuple[Path, str]]):
+def format_path_mappings(mapping: Mapping[Path, tuple[Path, str]]):
     return [
         f"{path.resolve()}:{bind.resolve()}:{mode}"
         for bind, (path, mode) in mapping.items()
@@ -116,7 +117,7 @@ def format_path_mappings(mapping: Mapping[Path, Tuple[Path, str]]):
 
 
 def build_docker_image(
-    dockerfile: BinaryIO, tag: Optional[str], buildargs: Mapping[str, str]
+    dockerfile: BinaryIO, tag: str | None, buildargs: Mapping[str, str]
 ):
     client = docker.APIClient()
 
@@ -126,7 +127,7 @@ def build_docker_image(
         json.loads,
         client.build(
             fileobj=dockerfile,
-            buildargs=buildargs,
+            buildargs=dict(buildargs),
             rm=True,
             tag=tag,
         ),
@@ -145,7 +146,7 @@ def build_docker_image(
     return image_id
 
 
-def quote_stream(stream: Iterable[bytes]):
+def quote_stream(stream: Iterable[bytes]) -> Iterable[bytes]:
     try:
         yield "\r╭─────┄┈\n".encode()
         yield from indent_stream(stream, "│ ".encode())

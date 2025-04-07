@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 from .argparse_helper import ArgparseMixin, arg, mutually_exclusive, yes_no_arg
 from .zmk import (
@@ -22,7 +22,7 @@ from .zmk import (
 logger = logging.getLogger(__name__)
 
 
-def main(argv: Optional[list[str]] = None):
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description="ZMK build helper; runs Zephyr build(s) and retrieves artefacts.",
         epilog="Extra arguments are passed to `west build` command.",
@@ -73,10 +73,10 @@ def main(argv: Optional[list[str]] = None):
         SHIELD_BOARD.board, SHIELD_BOARD.primary_shield, shield_dirs
     ):
         if ARTEFACTS.left_only and item.shield_side != "left":
-            logger.info(f'not building `{item.shield_side}` side (`left` only)')
+            logger.info(f"not building `{item.shield_side}` side (`left` only)")
             continue
         if ARTEFACTS.right_only and item.shield_side != "right":
-            logger.info(f'not building `{item.shield_side}` side (`right` only)')
+            logger.info(f"not building `{item.shield_side}` side (`right` only)")
             continue
 
         build_dir = DIRS.build / join([item.zmk_shield, item.zmk_board], "-")
@@ -90,7 +90,7 @@ def main(argv: Optional[list[str]] = None):
         )
         west_build_cmd = west_build_command(
             item.zmk_board,
-            shields,
+            *shields,
             app_dir=DIRS.zmk_app,
             zmk_config=DIRS.zmk_config if DIRS.zmk_config.is_dir() else None,
             build_dir=build_dir,
@@ -225,11 +225,11 @@ class Artefacts(ArgparseMixin):
 
 @dataclass(frozen=True)
 class FwOptions(ArgparseMixin):
-    logging: Optional[bool]
-    usb: Optional[bool]
-    ble: Optional[bool]
-    max_bt: Optional[int]
-    kb_name: Optional[str]
+    logging: bool | None
+    usb: bool | None
+    ble: bool | None
+    max_bt: int | None
+    kb_name: str | None
 
     _argparse_prefix = "with-"
 
@@ -315,7 +315,7 @@ class Misc(ArgparseMixin):
     )
 
 
-def join(parts: Iterable[Optional[str]], sep: str) -> str:
+def join(parts: Iterable[str | None], sep: str) -> str:
     return sep.join(filter(None, parts))
 
 

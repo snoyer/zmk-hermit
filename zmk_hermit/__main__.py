@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
-from typing import Iterable, Iterator, Optional, Sequence
+from typing import Iterable, Iterator, Sequence
 
 import zmk_build
 from zmk_build.argparse_helper import ArgparseMixin, arg
@@ -38,6 +38,7 @@ def main():
     KbArgs.Add_arguments(parser, group="Keyboard")
     OutputArgs.Add_arguments(parser, group="Output")
     ZmkArgs.Add_arguments(parser, group="ZMK")
+    parser.add_argument("--security-opt", help="Docker security-opt")
 
     parsed_args, extra_args = parser.parse_known_args()
 
@@ -50,7 +51,13 @@ def main():
         log.setLevel(logging.DEBUG if out_args.verbose else logging.INFO)
 
     try:
-        return run_build(kb_args, out_args, zmk_args, extra_args)
+        return run_build(
+            kb_args,
+            out_args,
+            zmk_args,
+            extra_args,
+            security_opt=str(parsed_args.security_opt),
+        )
     except ValueError as e:
         logger.error(f"error: {e}")
         return 2
@@ -59,7 +66,11 @@ def main():
 
 
 def run_build(
-    kb_args: KbArgs, out_args: OutputArgs, zmk_args: ZmkArgs, extra_args: Sequence[str]
+    kb_args: KbArgs,
+    out_args: OutputArgs,
+    zmk_args: ZmkArgs,
+    extra_args: Sequence[str],
+    security_opt: str | None = None,
 ):
     volumes = Volumes()
 
@@ -149,7 +160,7 @@ def run_build(
             raise ValueError("build directory not a directory")
 
     py_module_dir = Path(zmk_build.__file__).parent
-    volumes[ZMKUSER_HOME / "py_zmk_build"] = py_module_dir, "ro"
+    volumes[ZMKUSER_HOME / "py_zmk_build"] = py_module_dir, "rw"
     build_script = "python3", "-m", "py_zmk_build"
 
     if zmk_args.zmk and Path(zmk_args.zmk).is_dir():
@@ -186,6 +197,7 @@ def run_build(
         (*build_script, *build_py_ags()),
         volumes=volumes,
         tag="zmk-hermit",
+        security_opt=[security_opt] if security_opt else None,
     )
 
     if not exit_code and out_args.into:
@@ -195,7 +207,7 @@ def run_build(
                 fn.suffix.lstrip(".") in out_args.extensions
                 and fn.stat().st_mtime > start_time
             ):
-                logger.info(f"retrieved `{out_args.into/ fn.name}`")
+                logger.info(f"retrieved `{out_args.into / fn.name}`")
 
     if modular_behaviors_shield_files:
         for temp_path in modular_behaviors_shield_files.temp_files:
@@ -212,7 +224,7 @@ def run_build(
 class KbArgs(ArgparseMixin):
     shields: list[str]
     board: str
-    keymap: Optional[str]
+    keymap: str | None
     zmk_config: Path
 
     _argparse = dict(
@@ -235,7 +247,7 @@ class KbArgs(ArgparseMixin):
 class OutputArgs(ArgparseMixin):
     extensions: list[str]
     into: Path
-    build_dir: Optional[Path]
+    build_dir: Path | None
     verbose: bool
 
     _argparse = dict(
@@ -310,9 +322,9 @@ class ZmkGitSource:
 
 
 def docker_image_args(
-    zmk_image: Optional[str],
-    zmk_git: Optional[str] = None,
-    zmk_git_branch: Optional[str] = None,
+    zmk_image: str | None,
+    zmk_git: str | None = None,
+    zmk_git_branch: str | None = None,
 ):
     if zmk_image:
         yield "ZMK_IMAGE", zmk_image
@@ -325,7 +337,7 @@ def docker_image_args(
     yield "USER", ZMKUSER
 
 
-def join(parts: Iterable[Optional[str]], sep: str):
+def join(parts: Iterable[str | None], sep: str):
     return sep.join(filter(None, parts))
 
 

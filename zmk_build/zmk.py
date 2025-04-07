@@ -1,9 +1,9 @@
-from dataclasses import dataclass
 import logging
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional, Union
+from typing import Any, Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -12,14 +12,14 @@ logger = logging.getLogger(__name__)
 class CompilationItem:
     zmk_board: str
     """valid zmk board name, eg. `nice_nano_v2`"""
-    shield_name: Optional[str]
+    shield_name: str | None = None
     """shield name, without `_side` suffix, eg. `corne`"""
-    shield_side: Optional[str]
+    shield_side: str | None = None
     """side name for split shields, `left` or `right`"""
 
     @property
-    def zmk_shield(self):
-        """valid zmk shield name, with `_side` prefix for split shields, 
+    def zmk_shield(self) -> str | None:
+        """valid zmk shield name, with `_side` prefix for split shields,
         eg. `corne_left`"""
         if self.shield_name and self.shield_side:
             return f"{self.shield_name}_{self.shield_side}"
@@ -28,14 +28,14 @@ class CompilationItem:
         else:
             return None
 
-    def filename(self, tag: Optional[str] = None, alias: Optional[str] = None):
+    def filename(self, tag: str | None = None, alias: str | None = None):
         basename = alias or join([self.shield_name, self.zmk_board], "-")
         if tag:
             basename += f"[{tag}]"
         return join([basename, self.shield_side], ".")
 
     @classmethod
-    def Find(cls, board: str, shield: Optional[str], shield_dirs: Iterable[Path]):
+    def Find(cls, board: str, shield: str | None, shield_dirs: Iterable[Path]):
         if shield:
             shield_path = find_dir(*(dir / shield for dir in shield_dirs))
             if shield_path:
@@ -48,9 +48,9 @@ class CompilationItem:
                 for side in sides:
                     yield cls(board, shield, side)
             else:
-                yield cls(board, shield, None)
+                yield cls(board, shield)
         else:
-            yield cls(board, None, None)
+            yield cls(board)
 
 
 def guess_board_name(board_dir: Path):
@@ -90,7 +90,7 @@ def guess_split_shield_sides(shield_dir: Path, shield_name: str):
     return set(find_all())
 
 
-def find_dir(*candidates: Path) -> Optional[Path]:
+def find_dir(*candidates: Path) -> Path | None:
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
@@ -114,8 +114,8 @@ def check_west_setup(zmk_app: Path):
         return False
 
 
-def run_west_setup(zmk_app: Path, dry_run: bool = False):
-    west_init_cmd = ["west", "init", "-l", zmk_app]
+def run_west_setup(zmk_app: Path, *, dry_run: bool = False):
+    west_init_cmd = ["west", "init", "-l", str(zmk_app)]
     action = "would run" if dry_run else "run"
     logger.debug(f"{action} `{subprocess.list2cmdline(west_init_cmd)}`")
     try:
@@ -138,15 +138,16 @@ def run_west_update(zmk_app: Path, dry_run: bool = False):
 
 def west_build_command(
     board: str,
-    shield: Optional[Union[str, List[str]]] = None,
-    app_dir: Optional[Path] = None,
-    build_dir: Optional[Path] = None,
-    bin_name: Optional[str] = None,
-    zmk_config: Optional[Path] = None,
+    *shields: str,
+    modules: Iterable[Path] = (),
+    app_dir: Path | None = None,
+    build_dir: Path | None = None,
+    bin_name: str | None = None,
+    zmk_config: Path | None = None,
     pristine: bool = False,
-    extra_args: Optional[Iterable[str]] = None,
-    extra_cmake_args: Optional[Iterable[str]] = None,
-) -> List[str]:
+    extra_args: Iterable[str] = (),
+    extra_cmake_args: Iterable[str] = (),
+) -> list[str]:
     def args() -> Iterator[str]:
         yield from ("-b", board)
 
@@ -156,24 +157,26 @@ def west_build_command(
         if build_dir:
             yield from ("-d", str(build_dir))
 
-        if extra_args:
-            yield from extra_args
+        yield from extra_args
 
-        shields = [shield] if isinstance(shield, str) else shield
-        cmake_vals = {
-            "SHIELD": " ".join(shields) if shields else None,
+        cmake_vals: dict[str, Any] = {
+            "SHIELD": join(shields, " ") if shields else None,
+            "ZMK_EXTRA_MODULES": join_paths(modules, ";") if modules else None,
             "ZMK_CONFIG": zmk_config,
             "CONFIG_KERNEL_BIN_NAME": f'"{bin_name}"' if bin_name else None,
         }
-        cmake_args = [f"-D{name}={val}" for name, val in cmake_vals.items() if val]
-        if extra_cmake_args:
-            cmake_args += extra_cmake_args
-
-        if cmake_args:
+        if cmake_args := (
+            *(f"-D{name}={val}" for name, val in cmake_vals.items() if val),
+            *extra_cmake_args,
+        ):
             yield from ("--", *cmake_args)
 
     return ["west", "build", *args()]
 
 
-def join(parts: Iterable[Optional[str]], sep: str) -> str:
+def join(parts: Iterable[str | None], sep: str) -> str:
     return sep.join(filter(None, parts))
+
+
+def join_paths(paths: Iterable[Path | None], sep: str) -> str:
+    return sep.join(str(path.expanduser()) for path in paths if path)

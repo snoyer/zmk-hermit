@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import re
-from argparse import _ArgumentGroup  # type: ignore
-from argparse import ArgumentParser, FileType, Namespace
-from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Tuple, TypeVar
+from argparse import (
+    ArgumentParser,
+    FileType,
+    Namespace,
+    _ArgumentGroup,  # type: ignore
+)
+from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 T = TypeVar("T")
 
@@ -12,17 +16,17 @@ class arg:
     def __init__(
         self,
         *option_strings: str,
-        nargs: Optional[int | str] = None,
-        const: Optional[T] = None,
-        default: Optional[T | str] = None,
-        type: Optional[Callable[[str], T] | FileType] = None,
-        action: Optional[str] = None,
-        choices: Optional[Iterable[T]] = None,
-        required: Optional[bool] = None,
-        help: Optional[str] = None,
-        metavar: Optional[str | Tuple[str, ...]] = None,
-        _parse: Optional[Callable[[str], T]] = None,
-        _dump: Optional[Callable[[Any], str]] = None,
+        nargs: int | str | None = None,
+        const: T | None = None,
+        default: T | str | None = None,
+        type: Callable[[str], T] | FileType | None = None,
+        action: str | None = None,
+        choices: Iterable[T] | None = None,
+        required: bool | None = None,
+        help: str | None = None,
+        metavar: str | tuple[str, ...] | None = None,
+        _parse: Callable[[str], T] | None = None,
+        _dump: Callable[[Any], str] | None = None,
     ) -> None:
         if not all(x.startswith("-") for x in option_strings):
             self.option_strings: tuple[str, ...] = tuple()
@@ -39,7 +43,7 @@ class arg:
         self.help = help
         self.metavar = metavar
 
-        self.parse = _parse or (lambda x: x)
+        self.parse: Callable[[str], Any] = _parse or (lambda x: x)
         self.dump = _dump or str
 
     def kwargs(self, dest: str):
@@ -63,7 +67,7 @@ class arg:
         return kwargs
 
 
-class mutually_exclusive(Dict[str, arg]):
+class mutually_exclusive(dict[str, arg]):
     pass
 
 
@@ -100,7 +104,7 @@ class ArgparseMixin:
 
     @classmethod
     def Add_arguments(
-        cls, parser: ArgumentParser | _ArgumentGroup, group: Optional[str] = None
+        cls, parser: ArgumentParser | _ArgumentGroup, group: str | None = None
     ):
         if group:
             parser = parser.add_argument_group(title=group)
@@ -125,11 +129,11 @@ class ArgparseMixin:
                 kwargs = arg.kwargs(dest=attr_name)
                 kwargs["dest"] = cls._prefix_dest(attr_name)
                 try:
-                    add_to.add_argument(*args, **kwargs) #type: ignore
+                    add_to.add_argument(*args, **kwargs)  # type: ignore
                 except TypeError as e:
                     if re.search(r"unexpected.*metavar", str(e)):
                         kwargs.pop("metavar")
-                        add_to.add_argument(*args, **kwargs) #type: ignore
+                        add_to.add_argument(*args, **kwargs)  # type: ignore
                     else:
                         raise
 
@@ -151,7 +155,7 @@ class ArgparseMixin:
 
 
 def yes_no_arg(*option_strings: str, help: str):
-    def yn_to_bool(s: Optional[str]):
+    def yn_to_bool(s: str | None):
         if s is not None:
             return s.lower().startswith("y")
 
