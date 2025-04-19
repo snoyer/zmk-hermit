@@ -16,7 +16,7 @@ from zmk_build.zmk import guess_board_name, guess_board_type, guess_shield_name
 
 from .dockerstuff import Volumes, run_in_container
 from .dockerstuff import logger as docker_logger
-from .modular_behaviors import ModularBehaviorsShieldFiles
+from .modular_behaviors import ModularBehaviorsModuleFiles
 
 logger = logging.getLogger(__name__)
 
@@ -136,21 +136,22 @@ def run_build(
         else:
             raise ValueError("output directory not a directory")
 
-    modular_behaviors_shield_files = None
     if zmk_args.behaviors:
-        behavior_shield_name = "zmk_hermit_behaviors"
+        behaviors_module_name = "zmk_hermit_behaviors"
         logger.debug(
-            f"creating `{behavior_shield_name}` shield to hold extra behavior sources"
+            f"creating `{behaviors_module_name}` module to hold extra behavior sources"
         )
-        shield_names.append(behavior_shield_name)
 
-        behavior_shield = ZMK_CONFIG / "boards" / "shields" / behavior_shield_name
+        behaviors_module = ZMK_CONFIG / "modules" / behaviors_module_name
 
-        modular_behaviors_shield_files = ModularBehaviorsShieldFiles(
-            map(Path, zmk_args.behaviors), behavior_shield
+        modular_behaviors_module_files = ModularBehaviorsModuleFiles(
+            map(Path, zmk_args.behaviors), behaviors_module
         )
-        for contents, path_in_shield in modular_behaviors_shield_files:
+        for contents, path_in_shield in modular_behaviors_module_files:
             volumes[path_in_shield] = contents, "ro"
+    else:
+        modular_behaviors_module_files = None
+        behaviors_module = None
 
     if out_args.build_dir:
         build_path = Path(out_args.build_dir)
@@ -175,6 +176,9 @@ def run_build(
     def build_py_ags() -> Iterator[str | Path]:
         yield from shield_names
         yield board_name
+
+        if behaviors_module:
+            yield from ("--module-dir", behaviors_module)
 
         yield from ("--name", output_basename)
         if out_args.extensions:
@@ -209,8 +213,8 @@ def run_build(
             ):
                 logger.info(f"retrieved `{out_args.into / fn.name}`")
 
-    if modular_behaviors_shield_files:
-        for temp_path in modular_behaviors_shield_files.temp_files:
+    if modular_behaviors_module_files:
+        for temp_path in modular_behaviors_module_files.temp_files:
             try:
                 temp_path.unlink()
                 logger.debug(f"removed temporary file `{temp_path}`")

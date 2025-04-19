@@ -91,6 +91,7 @@ def main(argv: list[str] | None = None):
         west_build_cmd = west_build_command(
             item.zmk_board,
             *shields,
+            modules=DIRS.modules,
             app_dir=DIRS.zmk_app,
             zmk_config=DIRS.zmk_config if DIRS.zmk_config.is_dir() else None,
             build_dir=build_dir,
@@ -144,6 +145,7 @@ class ShieldBoard(ArgparseMixin):
 class Directories(ArgparseMixin):
     zmk: Path
     zmk_config: Path
+    modules: list[Path]
     build: Path
 
     @property
@@ -165,6 +167,13 @@ class Directories(ArgparseMixin):
             default="./zmk-config",
             metavar="DIR",
             help="zmk-config directory (default: %(default)s)",
+        ),
+        modules=arg(
+            "--module",
+            nargs="*",
+            type=Path,
+            metavar="DIR",
+            help="zmk module directories",
         ),
         build=arg(
             "--build",

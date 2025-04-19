@@ -1,31 +1,30 @@
-import re
 import tempfile
 from pathlib import Path
 from typing import Iterable
 
 
-def modular_behaviors_shield_contents(behavior_files: Iterable[Path], shield_dir: Path):
+def modular_behaviors_module_contents(behavior_files: Iterable[Path], module_dir: Path):
     behavior_files = list(behavior_files)
-    shield_name = re.sub(r"\W", "_", shield_dir.name)
 
-    # new `.overlay` and `Kconfig.shield` files needed for the shield to be valid
-    yield shield_dir / f"{shield_name}.overlay", [""]
-    Kconfig = [
-        f"config SHIELD_{shield_name.upper()}",
-        f"   def_bool $(shields_list_contains,{shield_name})",
+    # new `zephyr/module.yml` file needed for the module to be valid
+    module_yml = [
+        "build:",
+        "  cmake: .",
+        "  settings:",
+        "    dts_root: .",
     ]
-    yield (shield_dir / "Kconfig.shield", Kconfig)
+    yield module_dir / "zephyr" / "module.yml", module_yml
 
     # new `CMakeLists.txt` file needed to include each behavior's `.cmake` file
     CMakeLists = [
         "target_include_directories(app PRIVATE ${CMAKE_SOURCE_DIR}/include)",
         *(f"include({f.name})" for f in behavior_files if f.suffix == ".cmake"),
     ]
-    yield (shield_dir / "CMakeLists.txt", CMakeLists)
+    yield module_dir / "CMakeLists.txt", CMakeLists
 
     # existing source files are relocated
     for behavior_file in behavior_files:
-        yield shield_dir / _location_for_file(behavior_file), behavior_file
+        yield module_dir / _location_for_file(behavior_file), behavior_file
 
 
 LOCATION_TEMPLATE_BY_SUFFIX = {
@@ -43,12 +42,12 @@ def _location_for_file(path: Path):
     return path.name
 
 
-class ModularBehaviorsShieldFiles:
+class ModularBehaviorsModuleFiles:
     def __init__(self, behavior_files: Iterable[Path], shield_dir: Path):
         self.files: dict[Path, Path] = {}
         self.temp_files: set[Path] = set()
 
-        for path_in_shield, contents in modular_behaviors_shield_contents(
+        for path_in_shield, contents in modular_behaviors_module_contents(
             behavior_files, shield_dir
         ):
             if isinstance(contents, Path):
