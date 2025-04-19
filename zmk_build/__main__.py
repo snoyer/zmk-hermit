@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .argparse_helper import ArgparseMixin, arg, mutually_exclusive, yes_no_arg
 from .zmk import (
@@ -55,10 +55,8 @@ def main(argv: list[str] | None = None):
     elif MISC.update_west:
         run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
 
-    extra_cmake_args = [f"-DCONFIG_{k}={v}" for k, v in FW_OPTS]
-    extra_cmake_args += ["-Wno-dev"]
-
-    extra_args: list[str] = []
+    extra_cmake_args = [*FW_OPTS.cmake_args(), "-Wno-dev"]
+    extra_args: list[str] = [*FW_OPTS.west_args()]
     for unknown_arg in unknown_args:
         if unknown_arg.startswith("-D"):
             extra_cmake_args.append(unknown_arg)
@@ -242,25 +240,29 @@ class FwOptions(ArgparseMixin):
 
     _argparse_prefix = "with-"
 
-    def __iter__(self):
+    def cmake_args(self) -> Iterator[str]:
         def yn(b: bool):
             return "y" if b else "n"
 
         if self.logging is not None:
-            yield "ZMK_USB_LOGGING", yn(self.logging)
+            yield f"-DCONFIG_ZMK_USB_LOGGING={yn(self.logging)}"
         if self.usb is not None:
-            yield "ZMK_USB", yn(self.usb)
+            yield f"-DCONFIG_ZMK_USB={yn(self.usb)}"
         if self.ble is not None:
-            yield "ZMK_BLE", yn(self.ble)
+            yield f"-DCONFIG_ZMK_BLE={yn(self.ble)}"
         if self.max_bt:
-            yield "BT_MAX_PAIRED", self.max_bt
-            yield "BT_MAX_CONN", self.max_bt
+            yield f"-DCONFIG_BT_MAX_PAIRED={self.max_bt}"
+            yield f"-DCONFIG_BT_MAX_CONN={self.max_bt}"
         if self.kb_name:
             escaped_kb_name = self.kb_name.replace('"', '\\"')
-            yield "ZMK_KEYBOARD_NAME", f'"{escaped_kb_name}"'
+            yield f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_kb_name}"'
+
+    def west_args(self) -> Iterator[str]:
+        if self.logging is not None:
+            yield from ("-S", "zmk-usb-logging")
 
     def __bool__(self):
-        return any(self)
+        return any(self.cmake_args()) or any(self.west_args())
 
     def __str__(self):
         def parts():
