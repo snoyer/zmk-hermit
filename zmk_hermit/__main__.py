@@ -56,7 +56,9 @@ def main():
             out_args,
             zmk_args,
             extra_args,
-            security_opt=str(parsed_args.security_opt),
+            security_opt=str(parsed_args.security_opt)
+            if parsed_args.security_opt
+            else None,
         )
     except ValueError as e:
         logger.error(f"error: {e}")
