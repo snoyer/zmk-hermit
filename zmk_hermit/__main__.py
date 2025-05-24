@@ -11,12 +11,12 @@ from time import time
 from typing import Iterable, Iterator, Sequence
 
 import zmk_build
-from zmk_build.argparse_helper import ArgparseMixin, arg
+from zmk_build.__main__ import FwOptions
+from zmk_build.argparse_dataclass import ArgparseMixin, arg_field
 from zmk_build.zmk import guess_board_name, guess_board_type, guess_shield_name
 
 from .dockerstuff import Volumes, run_in_container
 from .dockerstuff import logger as docker_logger
-from .modular_behaviors import ModularBehaviorsModuleFiles
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +35,26 @@ def main():
         description="Compile out-of-tree ZMK keyboard in a Docker container.",
     )
 
-    KbArgs.Add_arguments(parser, group="Keyboard")
-    OutputArgs.Add_arguments(parser, group="Output")
+    group = parser.add_argument_group("keyboard")
+    KbArgs.Add_arguments(group)
+    FwOptions.Add_arguments(group)
+    OutputArgs.Add_arguments(parser, group="artefacts")
     ZmkArgs.Add_arguments(parser, group="ZMK")
-    parser.add_argument("--security-opt", help="Docker security-opt")
+    parser.add_argument("-v", "--verbose", action="store_true", help="print more")
+    parser.add_argument("--docker-security-opt", help="Docker security-opt")
+
+    parser._action_groups.sort(key=lambda g: 1 if g.title == "options" else 0)
 
     parsed_args, extra_args = parser.parse_known_args()
+    extra_args += FwOptions.From_args(parsed_args).to_args()
 
-    kb_args = KbArgs.From_parsed_args(parsed_args)
-    out_args = OutputArgs.From_parsed_args(parsed_args)
-    zmk_args = ZmkArgs.From_parsed_args(parsed_args)
+    kb_args = KbArgs.From_args(parsed_args)
+    out_args = OutputArgs.From_args(parsed_args)
+    zmk_args = ZmkArgs.From_args(parsed_args)
 
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     for log in (logger, docker_logger):
-        log.setLevel(logging.DEBUG if out_args.verbose else logging.INFO)
+        log.setLevel(logging.DEBUG if parsed_args.verbose else logging.INFO)
 
     try:
         return run_build(
@@ -56,9 +62,8 @@ def main():
             out_args,
             zmk_args,
             extra_args,
-            security_opt=str(parsed_args.security_opt)
-            if parsed_args.security_opt
-            else None,
+            security_opt=parsed_args.docker_security_opt,
+            verbose=parsed_args.verbose,
         )
     except ValueError as e:
         logger.error(f"error: {e}")
@@ -73,6 +78,7 @@ def run_build(
     zmk_args: ZmkArgs,
     extra_args: Sequence[str],
     security_opt: str | None = None,
+    verbose: bool = False,
 ):
     volumes = Volumes()
 
@@ -138,40 +144,33 @@ def run_build(
         else:
             raise ValueError("output directory not a directory")
 
-    if zmk_args.behaviors:
-        behaviors_module_name = "zmk_hermit_behaviors"
-        logger.debug(
-            f"creating `{behaviors_module_name}` module to hold extra behavior sources"
-        )
+    extra_modules: list[Path] = []
+    if zmk_args.modules:
+        for module_dir in map(Path, zmk_args.modules):
+            if module_dir.is_dir():
+                module_dir_inside = ZMK_CONFIG / "modules" / module_dir.name
+                volumes[module_dir_inside] = module_dir, "ro"
+                extra_modules.append(module_dir_inside)
+            else:
+                raise ValueError(f"module directory {module_dir} is not a directory")
 
-        behaviors_module = ZMK_CONFIG / "modules" / behaviors_module_name
-
-        modular_behaviors_module_files = ModularBehaviorsModuleFiles(
-            map(Path, zmk_args.behaviors), behaviors_module
-        )
-        for contents, path_in_shield in modular_behaviors_module_files:
-            volumes[path_in_shield] = contents, "ro"
-    else:
-        modular_behaviors_module_files = None
-        behaviors_module = None
-
-    if out_args.build_dir:
-        build_path = Path(out_args.build_dir)
+    if zmk_args.build_dir:
+        build_path = Path(zmk_args.build_dir)
         if build_path.is_dir():
             volumes[BUILD] = build_path, "rw"
         else:
-            raise ValueError("build directory not a directory")
+            raise ValueError(f"build directory {zmk_args.build_dir} is not a directory")
 
     py_module_dir = Path(zmk_build.__file__).parent
-    volumes[ZMKUSER_HOME / "py_zmk_build"] = py_module_dir, "rw"
+    volumes[ZMKUSER_HOME / "py_zmk_build"] = py_module_dir, "ro"
     build_script = "python3", "-m", "py_zmk_build"
 
-    if zmk_args.zmk and Path(zmk_args.zmk).is_dir():
-        volumes[ZMK_HOME] = Path(zmk_args.zmk).expanduser(), "rw"
+    if zmk_args.zmk_src and Path(zmk_args.zmk_src).is_dir():
+        volumes[ZMK_HOME] = Path(zmk_args.zmk_src).expanduser(), "rw"
         dockerfile = DIR / "Dockerfile-local-src"
         image_args = docker_image_args(zmk_args.zmk_image)
     else:
-        repo = ZmkGitSource.Parse(zmk_args.zmk)
+        repo = ZmkGitSource.Parse(zmk_args.zmk_src)
         dockerfile = DIR / "Dockerfile-git-src"
         image_args = docker_image_args(zmk_args.zmk_image, repo.repo, repo.branch)
 
@@ -179,20 +178,20 @@ def run_build(
         yield from shield_names
         yield board_name
 
-        if behaviors_module:
-            yield from ("--module-dir", behaviors_module)
+        if extra_modules:
+            yield from ("--module-dir", *extra_modules)
 
         yield from ("--name", output_basename)
         if out_args.extensions:
             yield from ("-f", *out_args.extensions)
         yield from ("--into", ARTEFACTS)
 
-        yield from ("--zmk-dir", ZMK_HOME)
-        yield from ("--zmk-config-dir", ZMK_CONFIG)
+        yield from ("--zmk-src", ZMK_HOME)
+        yield from ("--zmk-config", ZMK_CONFIG)
         yield from ("--build-dir", BUILD)
         yield from extra_args
 
-        if out_args.verbose:
+        if verbose:
             yield "--verbose"
 
     start_time = time()
@@ -215,101 +214,76 @@ def run_build(
             ):
                 logger.info(f"retrieved `{out_args.into / fn.name}`")
 
-    if modular_behaviors_module_files:
-        for temp_path in modular_behaviors_module_files.temp_files:
-            try:
-                temp_path.unlink()
-                logger.debug(f"removed temporary file `{temp_path}`")
-            except IOError:
-                logger.warning(f"could not remove temporary file `{temp_path}`")
-
     return exit_code
 
 
 @dataclass
 class KbArgs(ArgparseMixin):
-    shields: list[str]
-    board: str
-    keymap: str | None
-    zmk_config: Path
-
-    _argparse = dict(
-        shields=arg(
-            nargs="*",
-            metavar="SHIELD",
-            help="ZMK shield name or out-of-tree shield directory",
-        ),
-        board=arg(
-            "board",
-            metavar="BOARD",
-            help="ZMK board name or out-of-tree board directory",
-        ),
-        keymap=arg("--keymap", metavar="FILE", help="out-of-tree keymap file"),
-        zmk_config=arg("--zmk-config", metavar="IMAGE", help="ZMK-config dir"),
+    shields: list[str] = arg_field(
+        "shield",
+        nargs="*",
+        metavar="SHIELD",
+        default=[],
+        help="ZMK shield name or out-of-tree shield directory",
     )
+    board: str = arg_field(
+        "board",
+        metavar="BOARD",
+        help="ZMK board name or out-of-tree board directory",
+    )
+    keymap: str | None = arg_field(
+        "--keymap", metavar="FILE", help="out-of-tree keymap file"
+    )
+    zmk_config: Path = arg_field("--zmk-config", metavar="DIR", help="ZMK-config dir")
 
 
 @dataclass
 class OutputArgs(ArgparseMixin):
-    extensions: list[str]
-    into: Path
-    build_dir: Path | None
-    verbose: bool
-
-    _argparse = dict(
-        extensions=arg(
-            "-f",
-            nargs="*",
-            default=["uf2"],
-            metavar="EXT",
-            help="extension of the artefact(s) to retrieve (default: uf2)",
-        ),
-        into=arg(
-            "--into",
-            type=Path,
-            default=tempfile.gettempdir(),
-            metavar="DIR",
-            help="directory to copy compiled .uf2 to (default: `%(default)s`)",
-        ),
-        build_dir=arg(
-            "--build-dir",
-            type=Path,
-            metavar="DIR",
-            help="build directory for ZMK",
-        ),
-        verbose=arg("-v", "--verbose", action="store_true", help="print more"),
+    extensions: list[str] = arg_field(
+        "-f",
+        nargs="*",
+        default=["uf2"],
+        metavar="EXT",
+        help="extension of the artefact(s) to retrieve (default: uf2)",
+    )
+    into: Path = arg_field(
+        "--into",
+        type=Path,
+        default=tempfile.gettempdir(),
+        metavar="DIR",
+        help="directory to copy compiled .uf2 to (default: `%(default)s`)",
     )
 
 
 @dataclass
 class ZmkArgs(ArgparseMixin):
-    behaviors: list[str]
-    zmk: str
-    zmk_image: str
-
-    _argparse = dict(
-        behaviors=arg(
-            "--behavior",
-            "--behaviors",
-            nargs="+",
-            metavar="FILE",
-            help="out-of-tree behavior files",
+    modules: list[str] = arg_field(
+        "--module",
+        "--modules",
+        nargs="+",
+        metavar="FILE",
+        help="out-of-tree modlule directories",
+    )
+    zmk_src: str = arg_field(
+        "--zmk-src",
+        default="zmkfirmware:main",
+        metavar="REPO",
+        help=(
+            "ZMK git repository (github-user:branch) or ZMK source directory"
+            " (default: `%(default)s`)"
         ),
-        zmk=arg(
-            "--zmk",
-            default="zmkfirmware:main",
-            metavar="REPO",
-            help=(
-                "ZMK git repository (github-user:branch) or ZMK source directory"
-                " (default: `%(default)s`)"
-            ),
-        ),
-        zmk_image=arg(
-            "--zmk-image",
-            default="zmkfirmware/zmk-build-arm:3.5",
-            metavar="IMAGE",
-            help="Docker ZMK-build image id (default: `%(default)s`)",
-        ),
+    )
+    zmk_image: str = arg_field(
+        "--zmk-image",
+        default="zmkfirmware/zmk-build-arm:3.5",
+        metavar="IMAGE",
+        help="Docker ZMK-build image id (default: `%(default)s`)",
+    )
+    build_dir: Path | None = arg_field(
+        "--build-dir",
+        type=Path,
+        metavar="DIR",
+        help="build directory for ZMK",
     )
 
 

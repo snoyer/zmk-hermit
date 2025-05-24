@@ -8,9 +8,9 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Sequence
 
-from .argparse_helper import ArgparseMixin, arg, mutually_exclusive, yes_no_arg
+from .argparse_dataclass import ArgparseMixin, arg_field
 from .zmk import (
     CompilationItem,
     check_west_setup,
@@ -28,19 +28,20 @@ def main(argv: list[str] | None = None):
         epilog="Extra arguments are passed to `west build` command.",
     )
 
-    ShieldBoard.Add_arguments(parser)
+    group = parser.add_argument_group("firmware")
+    ShieldBoard.Add_arguments(group)
+    FwOptions.Add_arguments(group)
     Artefacts.Add_arguments(parser, group="artefacts")
-    FwOptions.Add_arguments(parser, group="firmware options")
     Directories.Add_arguments(parser, group="directories")
     Misc.Add_arguments(parser)
 
     args, unknown_args = parser.parse_known_args(argv)
 
-    SHIELD_BOARD = ShieldBoard.From_parsed_args(args)
-    DIRS = Directories.From_parsed_args(args)
-    FW_OPTS = FwOptions.From_parsed_args(args)
-    ARTEFACTS = Artefacts.From_parsed_args(args)
-    MISC = Misc.From_parsed_args(args)
+    SHIELD_BOARD = ShieldBoard.From_args(args)
+    DIRS = Directories.From_args(args)
+    FW_OPTS = FwOptions.From_args(args)
+    ARTEFACTS = Artefacts.From_args(args)
+    MISC = Misc.From_args(args)
 
     logging.basicConfig(
         level=logging.DEBUG if MISC.verbose else logging.INFO, format="%(message)s"
@@ -55,13 +56,12 @@ def main(argv: list[str] | None = None):
     elif MISC.update_west:
         run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
 
-    extra_cmake_args = [*FW_OPTS.cmake_args(), "-Wno-dev"]
-    extra_args: list[str] = [*FW_OPTS.west_args()]
+    extra_west_args, extra_cmake_args = FW_OPTS.args()
     for unknown_arg in unknown_args:
         if unknown_arg.startswith("-D"):
             extra_cmake_args.append(unknown_arg)
         else:
-            extra_args.append(unknown_arg)
+            extra_west_args.append(unknown_arg)
 
     shield_dirs = [
         DIRS.zmk_config / "boards" / "shields",
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None):
             build_dir=build_dir,
             bin_name=tmp_bin_name,
             pristine=MISC.pristine,
-            extra_args=extra_args,
+            extra_args=extra_west_args,
             extra_cmake_args=extra_cmake_args,
         )
         action = "would run" if MISC.dry_run else "run"
@@ -122,8 +122,10 @@ def main(argv: list[str] | None = None):
 
 @dataclass(frozen=True)
 class ShieldBoard(ArgparseMixin):
-    shields: list[str]
-    board: str
+    shields: list[str] = arg_field(
+        "shield", nargs="*", metavar="SHIELD", help="shield names"
+    )
+    board: str = arg_field("board", metavar="BOARD", help="board name")
 
     @property
     def primary_shield(self):
@@ -133,136 +135,156 @@ class ShieldBoard(ArgparseMixin):
     def secondary_shields(self):
         return self.shields[1:]
 
-    _argparse = dict(
-        shields=arg(nargs="*", metavar="SHIELD", help="shield names"),
-        board=arg(metavar="BOARD", help="board name"),
-    )
-
 
 @dataclass(frozen=True)
 class Directories(ArgparseMixin):
-    zmk: Path
-    zmk_config: Path
-    modules: list[Path]
-    build: Path
+    zmk: Path = arg_field(
+        "--zmk-src",
+        type=Path,
+        default=".",
+        metavar="DIR",
+        help="ZMK base directory (default: %(default)s)",
+    )
+    zmk_config: Path = arg_field(
+        "--zmk-config",
+        type=Path,
+        default="./zmk-config",
+        metavar="DIR",
+        help="zmk-config directory (default: %(default)s)",
+    )
+    modules: list[Path] = arg_field(
+        "--module-dir",
+        "--module-dirs",
+        nargs="*",
+        type=Path,
+        metavar="DIR",
+        help="zmk module directories",
+    )
+    build: Path = arg_field(
+        "--build-dir",
+        type=Path,
+        default=Path(tempfile.gettempdir()) / "zmk-build",
+        metavar="DIR",
+        help="build directory (default: %(default)s)",
+    )
 
     @property
     def zmk_app(self):
         return self.zmk / "app"
 
-    _argparse_suffix = "-dir"
-    _argparse = dict(
-        zmk=arg(
-            "--zmk",
-            type=Path,
-            default=".",
-            metavar="DIR",
-            help="ZMK base directory (default: %(default)s)",
-        ),
-        zmk_config=arg(
-            "--zmk-config",
-            type=Path,
-            default="./zmk-config",
-            metavar="DIR",
-            help="zmk-config directory (default: %(default)s)",
-        ),
-        modules=arg(
-            "--module",
-            nargs="*",
-            type=Path,
-            metavar="DIR",
-            help="zmk module directories",
-        ),
-        build=arg(
-            "--build",
-            type=Path,
-            default=Path(tempfile.gettempdir()) / "zmk-build",
-            metavar="DIR",
-            help="build directory (default: %(default)s)",
-        ),
-    )
-
 
 @dataclass(frozen=True)
 class Artefacts(ArgparseMixin):
-    left_only: bool
-    right_only: bool
-    directory: Path
-    name: str
-    extensions: list[str]
+    _argparse_mutually_exclusive = (("left_only", "right_only"),)
 
-    _argparse = (
-        mutually_exclusive(
-            left_only=arg(
-                "-l",
-                "--left-only",
-                action="store_true",
-                help="build only left side of split board/shield",
-            ),
-            right_only=arg(
-                "-r",
-                "--right-only",
-                action="store_true",
-                help="build only right side of split board/shield",
-            ),
-        ),
-        dict(
-            directory=arg(
-                "--into",
-                type=Path,
-                default=tempfile.gettempdir(),
-                metavar="DIR",
-                help="artefacts destination directory (default: %(default)s)",
-            ),
-            name=arg(
-                "--name",
-                metavar="NAME",
-                help="basename used to rename the artefact(s)",
-            ),
-            extensions=arg(
-                "-f",
-                nargs="*",
-                default=["uf2"],
-                metavar="EXT",
-                help="extension of the artefact(s) to retrieve (default: uf2)",
-            ),
-        ),
+    left_only: bool = arg_field(
+        "-l",
+        "--left-only",
+        action="store_true",
+        help="build only left side of split board/shield",
+    )
+    right_only: bool = arg_field(
+        "-r",
+        "--right-only",
+        action="store_true",
+        help="build only right side of split board/shield",
+    )
+    directory: Path = arg_field(
+        "--into",
+        type=Path,
+        default=tempfile.gettempdir(),
+        metavar="DIR",
+        help="artefacts destination directory (default: %(default)s)",
+    )
+    name: str = arg_field(
+        "--name",
+        metavar="NAME",
+        help="basename used to rename the artefact(s)",
+    )
+    extensions: list[str] = arg_field(
+        "-f",
+        nargs="*",
+        default=["uf2"],
+        metavar="EXT",
+        help="extension of the artefact(s) to retrieve (default: uf2)",
+    )
+
+
+def opt_yn_arg_field(
+    *name_or_flags: str, default: bool | None = None, help: str | None = None
+):
+    def to_arg(name_or_flags: Sequence[str], val: bool | None):
+        if val is not None:
+            v = "y" if val else "n"
+            yield f"{min(name_or_flags, key=len)}={v}"
+
+    def bool_from_yn(arg: str | bool | None):
+        if arg is None or isinstance(arg, bool):
+            return arg
+        elif arg.lower() in ("yes", "y", "true", "1"):
+            return True
+        elif arg.lower() in ("no", "n", "false", "0"):
+            return False
+        else:
+            raise ValueError()
+
+    return arg_field(
+        *name_or_flags,
+        default=default,
+        type=bool_from_yn,
+        nargs="?",
+        const=True,
+        help=help,
+        metavar="y/n",
+        _to_arg=to_arg,
     )
 
 
 @dataclass(frozen=True)
 class FwOptions(ArgparseMixin):
-    logging: bool | None
-    usb: bool | None
-    ble: bool | None
-    max_bt: int | None
-    kb_name: str | None
+    logging: bool | None = opt_yn_arg_field(
+        "--with-logging", help="set CONFIG_ZMK_USB_LOGGING"
+    )
+    usb: bool | None = opt_yn_arg_field("--with-usb", help="set CONFIG_ZMK_USB")
+    ble: bool | None = opt_yn_arg_field("--with-ble", help="set CONFIG_ZMK_BLE")
+    max_bt: int | None = arg_field(
+        "--with-max-bt",
+        type=int,
+        metavar="N",
+        help="set CONFIG_BT_MAX_PAIRED and CONFIG_BT_MAX_CONN",
+    )
+    kb_name: str | None = arg_field(
+        "--with-kb-name", help="set CONFIG_ZMK_KEYBOARD_NAME"
+    )
 
-    _argparse_prefix = "with-"
+    def __bool__(self):
+        west_args, cmake_args = self.args()
+        return any(cmake_args) or any(west_args)
 
-    def cmake_args(self) -> Iterator[str]:
+    def args(self):
+        west_args: list[str] = []
+        cmake_args: list[str] = []
+
         def yn(b: bool):
             return "y" if b else "n"
 
         if self.logging is not None:
-            yield f"-DCONFIG_ZMK_USB_LOGGING={yn(self.logging)}"
+            west_args += "-S", "zmk-usb-logging"
+            cmake_args += (f"-DCONFIG_ZMK_USB_LOGGING={yn(self.logging)}",)
         if self.usb is not None:
-            yield f"-DCONFIG_ZMK_USB={yn(self.usb)}"
+            cmake_args += (f"-DCONFIG_ZMK_USB={yn(self.usb)}",)
         if self.ble is not None:
-            yield f"-DCONFIG_ZMK_BLE={yn(self.ble)}"
+            cmake_args += (f"-DCONFIG_ZMK_BLE={yn(self.ble)}",)
         if self.max_bt:
-            yield f"-DCONFIG_BT_MAX_PAIRED={self.max_bt}"
-            yield f"-DCONFIG_BT_MAX_CONN={self.max_bt}"
+            cmake_args += (
+                f"-DCONFIG_BT_MAX_PAIRED={self.max_bt}",
+                f"-DCONFIG_BT_MAX_CONN={self.max_bt}",
+            )
         if self.kb_name:
             escaped_kb_name = self.kb_name.replace('"', '\\"')
-            yield f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_kb_name}"'
+            cmake_args += (f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_kb_name}"',)
 
-    def west_args(self) -> Iterator[str]:
-        if self.logging is not None:
-            yield from ("-S", "zmk-usb-logging")
-
-    def __bool__(self):
-        return any(self.cmake_args()) or any(self.west_args())
+        return west_args, cmake_args
 
     def __str__(self):
         def parts():
@@ -283,47 +305,27 @@ class FwOptions(ArgparseMixin):
 
         return ",".join(parts())
 
-    _argparse = dict(
-        logging=yes_no_arg("--logging", help="set CONFIG_ZMK_USB_LOGGING"),
-        usb=yes_no_arg("--usb", help="set CONFIG_ZMK_USB"),
-        ble=yes_no_arg("--ble", help="set CONFIG_ZMK_BLE"),
-        max_bt=arg(
-            "--max-bt",
-            type=int,
-            metavar="N",
-            help="set CONFIG_BT_MAX_PAIRED and CONFIG_BT_MAX_CONN",
-        ),
-        kb_name=arg("--kb-name", help="set CONFIG_ZMK_KEYBOARD_NAME"),
-    )
-
 
 @dataclass(frozen=True)
 class Misc(ArgparseMixin):
-    update_west: bool
-    pristine: bool
-    dry_run: bool
-    verbose: bool
-
-    _argparse = dict(
-        update_west=arg(
-            "--update-west",
-            action="store_true",
-            help="update west before building",
-        ),
-        pristine=arg(
-            "-p",
-            "--pristine",
-            action="store_true",
-            help="clean build directories before starting",
-        ),
-        dry_run=arg(
-            "-n",
-            "--dry-run",
-            action="store_true",
-            help="just print build commands; don't run them",
-        ),
-        verbose=arg("-v", "--verbose", action="store_true", help="print more"),
+    update_west: bool = arg_field(
+        "--west-update",
+        action="store_true",
+        help="update west before building",
     )
+    pristine: bool = arg_field(
+        "-p",
+        "--pristine",
+        action="store_true",
+        help="clean build directories before starting",
+    )
+    dry_run: bool = arg_field(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="just print build commands; don't run them",
+    )
+    verbose: bool = arg_field("-v", "--verbose", action="store_true", help="print more")
 
 
 def join(parts: Iterable[str | None], sep: str) -> str:
