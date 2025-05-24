@@ -57,6 +57,7 @@ def main():
         log.setLevel(logging.DEBUG if parsed_args.verbose else logging.INFO)
 
     try:
+        zmk_args.build_dir.mkdir(parents=True, exist_ok=True)
         return run_build(
             kb_args,
             out_args,
@@ -155,9 +156,8 @@ def run_build(
                 raise ValueError(f"module directory {module_dir} is not a directory")
 
     if zmk_args.build_dir:
-        build_path = Path(zmk_args.build_dir)
-        if build_path.is_dir():
-            volumes[BUILD] = build_path, "rw"
+        if zmk_args.build_dir.is_dir():
+            volumes[BUILD] = zmk_args.build_dir, "rw"
         else:
             raise ValueError(f"build directory {zmk_args.build_dir} is not a directory")
 
@@ -279,11 +279,12 @@ class ZmkArgs(ArgparseMixin):
         metavar="IMAGE",
         help="Docker ZMK-build image id (default: `%(default)s`)",
     )
-    build_dir: Path | None = arg_field(
+    build_dir: Path = arg_field(
         "--build-dir",
         type=Path,
+        default=Path(tempfile.gettempdir()) / "zmk-build",
         metavar="DIR",
-        help="build directory for ZMK",
+        help="build directory for ZMK (default: %(default)s)",
     )
 
 
