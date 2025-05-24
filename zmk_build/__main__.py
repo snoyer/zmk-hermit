@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import re
 import shutil
@@ -77,7 +78,17 @@ def main(argv: list[str] | None = None):
             logger.info(f"not building `{item.shield_side}` side (`right` only)")
             continue
 
-        build_dir = DIRS.build / join([item.zmk_shield, item.zmk_board], "-")
+        # if there's more than 1 shield, compute a hash to have a unique build sub directory
+        board_shields_hash = (
+            hashlib.md5(
+                repr((SHIELD_BOARD.board, *SHIELD_BOARD.shields)).encode()
+            ).hexdigest()[-8:]
+            if SHIELD_BOARD.secondary_shields
+            else None
+        )
+        build_dir = DIRS.build / join(
+            [item.zmk_shield, item.zmk_board, board_shields_hash], "-"
+        )
         tmp_bin_name = item.filename(alias=ARTEFACTS.name)
         final_bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
 
