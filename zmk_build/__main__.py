@@ -254,7 +254,8 @@ def opt_yn_arg_field(
 @dataclass(frozen=True)
 class FwOptions(ArgparseMixin):
     logging: bool | None = opt_yn_arg_field(
-        "--with-logging", help="set CONFIG_ZMK_USB_LOGGING"
+        "--with-logging",
+        help="set CONFIG_ZMK_USB_LOGGING select zmk-usb-logging snippet",
     )
     usb: bool | None = opt_yn_arg_field("--with-usb", help="set CONFIG_ZMK_USB")
     ble: bool | None = opt_yn_arg_field("--with-ble", help="set CONFIG_ZMK_BLE")
@@ -266,6 +267,17 @@ class FwOptions(ArgparseMixin):
     )
     kb_name: str | None = arg_field(
         "--with-kb-name", help="set CONFIG_ZMK_KEYBOARD_NAME"
+    )
+    studio: bool | None = opt_yn_arg_field(
+        "--with-studio",
+        help="set CONFIG_ZMK_STUDIO and select studio-rpc-usb-uart snippet",
+    )
+    split_battery: bool | None = opt_yn_arg_field(
+        "--with-split-battery",
+        help="set CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY and CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING",
+    )
+    pointing: bool | None = opt_yn_arg_field(
+        "--with-pointing", help="set CONFIG_ZMK_POINTING"
     )
 
     def __bool__(self):
@@ -280,7 +292,8 @@ class FwOptions(ArgparseMixin):
             return "y" if b else "n"
 
         if self.logging is not None:
-            west_args += "-S", "zmk-usb-logging"
+            if self.logging:
+                west_args += "-S", "zmk-usb-logging"
             cmake_args += (f"-DCONFIG_ZMK_USB_LOGGING={yn(self.logging)}",)
         if self.usb is not None:
             cmake_args += (f"-DCONFIG_ZMK_USB={yn(self.usb)}",)
@@ -294,7 +307,17 @@ class FwOptions(ArgparseMixin):
         if self.kb_name:
             escaped_kb_name = self.kb_name.replace('"', '\\"')
             cmake_args += (f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_kb_name}"',)
-
+        if self.studio is not None:
+            if self.studio:
+                west_args += "-S", "studio-rpc-usb-uart"
+            cmake_args += (f"-DCONFIG_ZMK_STUDIO={yn(self.studio)}",)
+        if self.split_battery is not None:
+            cmake_args += (
+                f"-DCONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY={yn(self.split_battery)}",
+                f"-DCONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING={yn(self.split_battery)}",
+            )
+        if self.pointing is not None:
+            cmake_args += (f"-DCONFIG_ZMK_POINTING={yn(self.pointing)}",)
         return west_args, cmake_args
 
     def __str__(self):
@@ -302,6 +325,12 @@ class FwOptions(ArgparseMixin):
             def yn(b: bool):
                 return "y" if b else "n"
 
+            if self.studio is not None:
+                yield f"studio={yn(self.studio)}"
+            if self.split_battery is not None:
+                yield f"split-battery={yn(self.split_battery)}"
+            if self.pointing is not None:
+                yield f"pointing={yn(self.pointing)}"
             if self.logging is not None:
                 yield f"logging={yn(self.logging)}"
             if self.usb is not None:
