@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,12 +166,9 @@ def run_build(
 
     if zmk_args.zmk_src and Path(zmk_args.zmk_src).is_dir():
         volumes[ZMK_HOME] = Path(zmk_args.zmk_src).expanduser(), "rw"
-        dockerfile = DIR / "Dockerfile-local-src"
         image_args = docker_image_args(zmk_args.zmk_image)
     else:
-        repo = ZmkGitSource.Parse(zmk_args.zmk_src)
-        dockerfile = DIR / "Dockerfile-git-src"
-        image_args = docker_image_args(zmk_args.zmk_image, repo.repo, repo.branch)
+        raise ValueError(f"source directory {zmk_args.build_dir} is not a directory")
 
     def build_py_ags() -> Iterator[str | Path]:
         yield from shield_names
@@ -197,7 +193,7 @@ def run_build(
     start_time = time()
 
     exit_code = run_in_container(
-        dockerfile,
+        DIR / "Dockerfile",
         image_args,
         (*build_script, *build_py_ags()),
         volumes=volumes,
@@ -257,27 +253,21 @@ class OutputArgs(ArgparseMixin):
 
 @dataclass
 class ZmkArgs(ArgparseMixin):
+    zmk_src: str = arg_field(
+        "--zmk-src", required=True, metavar="DIR", help="ZMK source directory"
+    )
     modules: list[str] = arg_field(
-        "--module",
-        "--modules",
+        "--zmk-module",
+        "--zmk-modules",
         nargs="+",
         metavar="FILE",
-        help="out-of-tree modlule directories",
-    )
-    zmk_src: str = arg_field(
-        "--zmk-src",
-        default="zmkfirmware:main",
-        metavar="REPO",
-        help=(
-            "ZMK git repository (github-user:branch) or ZMK source directory"
-            " (default: `%(default)s`)"
-        ),
+        help="out-of-tree module directories",
     )
     zmk_image: str = arg_field(
         "--zmk-image",
         default="zmkfirmware/zmk-build-arm:3.5",
         metavar="IMAGE",
-        help="Docker ZMK-build image id (default: `%(default)s`)",
+        help="ZMK-build Docker image (default: `%(default)s`)",
     )
     build_dir: Path = arg_field(
         "--build-dir",
@@ -288,31 +278,8 @@ class ZmkArgs(ArgparseMixin):
     )
 
 
-@dataclass
-class ZmkGitSource:
-    repo: str
-    branch: str
-
-    @classmethod
-    def Parse(cls, txt: str):
-        if m := re.match(r"([-_\w]+)(:(.+))?$", txt):
-            user = m.group(1)
-            branch = m.group(3) or "main"
-            return cls(f"https://github.com/{user}/zmk.git", branch=branch)
-        raise ValueError(txt)
-
-
-def docker_image_args(
-    zmk_image: str | None,
-    zmk_git: str | None = None,
-    zmk_git_branch: str | None = None,
-):
-    if zmk_image:
-        yield "ZMK_IMAGE", zmk_image
-    if zmk_git:
-        yield "ZMK_GIT", zmk_git
-    if zmk_git_branch:
-        yield "ZMK_GIT_BRANCH", zmk_git_branch
+def docker_image_args(zmk_image: str):
+    yield "ZMK_IMAGE", zmk_image
     yield "UID", str(os.getuid())
     yield "GID", str(os.getgid())
     yield "USER", ZMKUSER
