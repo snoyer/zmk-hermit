@@ -24,6 +24,7 @@ ZMKUSER = "zmkuser"
 ZMKUSER_HOME = Path("/home") / ZMKUSER
 ZMK_HOME = ZMKUSER_HOME / "zmk"
 ZMK_CONFIG = Path("/zmk-config")
+ZMK_MODULES = Path("/zmk-modules")
 ARTEFACTS = Path("/artefacts")
 BUILD = Path("/tmp/zmk-build")
 DIR = Path(__file__).parent
@@ -148,7 +149,7 @@ def run_build(
     if zmk_args.modules:
         for module_dir in map(Path, zmk_args.modules):
             if module_dir.is_dir():
-                module_dir_inside = ZMK_CONFIG / "modules" / module_dir.name
+                module_dir_inside = ZMK_MODULES / module_dir.name
                 volumes[module_dir_inside] = module_dir, "ro"
                 extra_modules.append(module_dir_inside)
             else:
