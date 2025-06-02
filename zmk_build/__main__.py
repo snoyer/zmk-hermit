@@ -78,24 +78,24 @@ def main(argv: list[str] | None = None):
             logger.info(f"not building `{item.shield_side}` side (`right` only)")
             continue
 
-        # if there's more than 1 shield, compute a hash to have a unique build sub directory
-        board_shields_hash = (
-            hashlib.md5(
-                repr((SHIELD_BOARD.board, *SHIELD_BOARD.shields)).encode()
-            ).hexdigest()[-8:]
-            if SHIELD_BOARD.secondary_shields
-            else None
+        # if there's more than 1 shield or snippet, compute a hash to have a unique build sub directory
+        build_id = (
+            *SHIELD_BOARD.shields,
+            *(arg for arg in extra_west_args if arg.startswith("-S=")),
+        )
+        build_hash = (
+            hashlib.md5(repr(build_id).encode()).hexdigest()[-8:] if build_id else None
         )
         build_dir = DIRS.build / join(
-            [item.zmk_shield, item.zmk_board, board_shields_hash], "-"
+            [item.zmk_shield, item.zmk_board, build_hash], "-"
         )
         tmp_bin_name = item.filename(alias=ARTEFACTS.name)
         final_bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
 
         shields = (
-            [item.zmk_shield, *SHIELD_BOARD.secondary_shields]
+            (item.zmk_shield, *SHIELD_BOARD.secondary_shields)
             if item.zmk_shield
-            else []
+            else ()
         )
         west_build_cmd = west_build_command(
             item.zmk_board,
@@ -293,7 +293,7 @@ class FwOptions(ArgparseMixin):
 
         if self.logging is not None:
             if self.logging:
-                west_args += "-S", "zmk-usb-logging"
+                west_args += ("-S=zmk-usb-logging",)
             cmake_args += (f"-DCONFIG_ZMK_USB_LOGGING={yn(self.logging)}",)
         if self.usb is not None:
             cmake_args += (f"-DCONFIG_ZMK_USB={yn(self.usb)}",)
@@ -309,7 +309,7 @@ class FwOptions(ArgparseMixin):
             cmake_args += (f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_kb_name}"',)
         if self.studio is not None:
             if self.studio:
-                west_args += "-S", "studio-rpc-usb-uart"
+                west_args += ("-S=studio-rpc-usb-uart",)
             cmake_args += (f"-DCONFIG_ZMK_STUDIO={yn(self.studio)}",)
         if self.split_battery is not None:
             cmake_args += (
