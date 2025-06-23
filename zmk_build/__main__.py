@@ -91,6 +91,7 @@ def main(argv: list[str] | None = None):
         )
         tmp_bin_name = item.filename(alias=ARTEFACTS.name)
         final_bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
+        final_bin_name = final_bin_name.replace("/", "_")
 
         shields = (
             (item.zmk_shield, *SHIELD_BOARD.secondary_shields)
