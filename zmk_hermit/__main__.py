@@ -129,8 +129,12 @@ def run_build(
         keymap_path = Path(kb_args.keymap).expanduser()
         if keymap_path.is_file():
             keymap_name = keymap_path.stem
-            tmp_name = primary_shield_name or board_name
-            volumes[ZMK_CONFIG / f"{tmp_name}.keymap"] = keymap_path, "ro"
+            if keymap_name in (primary_shield_name, board_name):
+                keymap_name = None
+
+            volumes[ZMK_CONFIG / f"{board_name}.keymap"] = keymap_path, "ro"
+            if name := primary_shield_name:
+                volumes[ZMK_CONFIG / f"{name}.keymap"] = (keymap_path, "ro")
         else:
             raise ValueError("out-of-tree keymap must be a file")
     else:
