@@ -121,29 +121,37 @@ def build_docker_image(
 ):
     client = docker.APIClient()
 
-    image_id = None
+    aux_data: dict[str, str] = {}
 
-    for data in map(
-        json.loads,
-        client.build(
-            fileobj=dockerfile,
-            buildargs=dict(buildargs),
-            rm=True,
-            tag=tag,
-        ),
-    ):
-        if "stream" in data:
-            for line in data["stream"].splitlines():
-                if line.startswith(" ---> ") or re.search(r"^Step \d+/\d+ : ", line):
-                    continue
-                if line.strip():
-                    logger.debug(line)
-        if "aux" in data:
-            image_id = data["aux"].get("ID")
-        if "errorDetail" in data:
-            raise IOError(data["errorDetail"].get("message"))
+    def build_image():
+        for data in map(
+            json.loads,
+            client.build(
+                fileobj=dockerfile,
+                buildargs=dict(buildargs),
+                rm=True,
+                tag=tag,
+            ),
+        ):
+            if "stream" in data:
+                for line in data["stream"].splitlines():
+                    if line.startswith(" ---> ") or re.search(
+                        r"^Step \d+/\d+ : ", line
+                    ):
+                        continue
+                    if line.strip():
+                        yield str(line).encode("utf8")
+                        yield b"\n"
+            if "aux" in data:
+                aux_data.update(data["aux"])
+            if "errorDetail" in data:
+                raise IOError(data["errorDetail"].get("message"))
 
-    return image_id
+    for line in quote_stream(build_image()):
+        sys.stdout.buffer.write(line)
+        sys.stdout.buffer.flush()
+
+    return aux_data.get("ID")
 
 
 def quote_stream(stream: Iterable[bytes]) -> Iterable[bytes]:
