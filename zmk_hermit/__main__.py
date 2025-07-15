@@ -173,7 +173,7 @@ def run_build(
         volumes[ZMK_HOME] = Path(zmk_args.zmk_src).expanduser(), "rw"
         image_args = docker_image_args(zmk_args.zmk_image)
     else:
-        raise ValueError(f"source directory {zmk_args.build_dir} is not a directory")
+        raise ValueError(f"source directory {zmk_args.zmk_src} is not a directory")
 
     def build_py_ags() -> Iterator[str | Path]:
         yield from shield_names
