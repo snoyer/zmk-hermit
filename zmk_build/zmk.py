@@ -163,7 +163,9 @@ def west_build_command(
             "SHIELD": join(shields, " ") if shields else None,
             "ZMK_EXTRA_MODULES": join_paths(modules, ";") if modules else None,
             "ZMK_CONFIG": zmk_config,
-            "CONFIG_KERNEL_BIN_NAME": f'"{bin_name}"' if bin_name else None,
+            "CONFIG_KERNEL_BIN_NAME": (
+                f'"{sanitize_bin_name(bin_name)}"' if bin_name else None
+            ),
         }
         if cmake_args := (
             *(f"-D{name}={val}" for name, val in cmake_vals.items() if val),
@@ -172,6 +174,10 @@ def west_build_command(
             yield from ("--", *cmake_args)
 
     return ["west", "build", *args()]
+
+
+def sanitize_bin_name(bin_name: str):
+    return re.sub(r"[/\\]", "_", bin_name)
 
 
 def join(parts: Iterable[str | None], sep: str) -> str:

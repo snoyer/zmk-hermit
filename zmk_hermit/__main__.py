@@ -132,7 +132,8 @@ def run_build(
             if keymap_name in (primary_shield_name, board_name):
                 keymap_name = None
 
-            volumes[ZMK_CONFIG / f"{board_name}.keymap"] = keymap_path, "ro"
+            board_base_name = board_name.split("/")[0]
+            volumes[ZMK_CONFIG / f"{board_base_name}.keymap"] = keymap_path, "ro"
             if name := primary_shield_name:
                 volumes[ZMK_CONFIG / f"{name}.keymap"] = (keymap_path, "ro")
         else:

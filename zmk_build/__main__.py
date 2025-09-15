@@ -17,6 +17,7 @@ from .zmk import (
     check_west_setup,
     run_west_setup,
     run_west_update,
+    sanitize_bin_name,
     west_build_command,
 )
 
@@ -91,7 +92,7 @@ def main(argv: list[str] | None = None):
         )
         tmp_bin_name = item.filename(alias=ARTEFACTS.name)
         final_bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
-        final_bin_name = final_bin_name.replace("/", "_")
+        final_bin_name = sanitize_bin_name(final_bin_name)
 
         shields = (
             (item.zmk_shield, *SHIELD_BOARD.secondary_shields)
