@@ -40,7 +40,7 @@ def main():
     FwOptions.Add_arguments(group)
     OutputArgs.Add_arguments(parser, group="artefacts")
     ZmkArgs.Add_arguments(parser, group="ZMK")
-    parser.add_argument("-v", "--verbose", action="store_true", help="print more")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="print more")
     parser.add_argument("--docker-security-opt", help="Docker security-opt")
 
     parser._action_groups.sort(key=lambda g: 1 if g.title == "options" else 0)
@@ -64,7 +64,7 @@ def main():
             zmk_args,
             extra_args,
             security_opt=parsed_args.docker_security_opt,
-            verbose=parsed_args.verbose,
+            verbose=parsed_args.verbose > 1,
         )
     except ValueError as e:
         logger.error(f"error: {e}")
@@ -205,6 +205,7 @@ def run_build(
         volumes=volumes,
         tag="zmk-hermit",
         security_opt=[security_opt] if security_opt else None,
+        verbose=verbose,
     )
 
     if not exit_code and out_args.into:

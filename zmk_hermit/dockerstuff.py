@@ -40,6 +40,7 @@ def run_in_container(
     volumes: VolumesMapping | None = None,
     devices: DevicesMapping | None = None,
     tag: str | None = None,
+    verbose: bool = False,
     **extra_run_kwargs: Any,
 ):
     client = docker.from_env()
@@ -49,6 +50,7 @@ def run_in_container(
         open(dockerfile, "rb"),
         buildargs=dict(image_args),
         tag=tag,
+        verbose=verbose,
     )
 
     container_args = map(str, container_args)
@@ -117,7 +119,10 @@ def format_path_mappings(mapping: Mapping[Path, tuple[Path, str]]):
 
 
 def build_docker_image(
-    dockerfile: BinaryIO, tag: str | None, buildargs: Mapping[str, str]
+    dockerfile: BinaryIO,
+    tag: str | None,
+    buildargs: Mapping[str, str],
+    verbose: bool = False,
 ):
     client = docker.APIClient()
 
@@ -135,8 +140,9 @@ def build_docker_image(
         ):
             if "stream" in data:
                 for line in data["stream"].splitlines():
-                    if line.startswith(" ---> ") or re.search(
-                        r"^Step \d+/\d+ : ", line
+                    if not verbose and (
+                        line.startswith(" ---> ")
+                        or re.search(r"^Step \d+/\d+ : ", line)
                     ):
                         continue
                     if line.strip():
@@ -151,7 +157,7 @@ def build_docker_image(
         sys.stdout.buffer.write(line)
         sys.stdout.buffer.flush()
 
-    return aux_data.get("ID")
+    return aux_data["ID"]
 
 
 def quote_stream(stream: Iterable[bytes]) -> Iterable[bytes]:
