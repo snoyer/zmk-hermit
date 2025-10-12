@@ -1,6 +1,5 @@
 import logging
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -96,44 +95,19 @@ def find_dir(*candidates: Path) -> Path | None:
             return candidate
 
 
-def check_west_setup(zmk_app: Path):
-    try:
-        check_west_cmd = ["west", "--help", "build"]
-        logger.debug(f"run `{subprocess.list2cmdline(check_west_cmd)}`")
-        subprocess.check_call(
-            check_west_cmd,
-            cwd=zmk_app,
-            text=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
-    except FileNotFoundError:
-        return False
+def check_west_setup_command(zmk_app: Path):
+    return ["west", "--help", "build"]
 
 
-def run_west_setup(zmk_app: Path, *, dry_run: bool = False):
-    west_init_cmd = ["west", "init", "-l", str(zmk_app)]
-    action = "would run" if dry_run else "run"
-    logger.debug(f"{action} `{subprocess.list2cmdline(west_init_cmd)}`")
-    try:
-        if not dry_run:
-            subprocess.check_call(west_init_cmd, cwd=zmk_app, text=True)
-    except subprocess.CalledProcessError:
-        pass
+def west_setup_command(zmk_app: Path):
+    return ["west", "init", "-l", str(zmk_app)]
 
 
-def run_west_update(zmk_app: Path, dry_run: bool = False):
-    for west_update_cmd in [
+def west_update_commands(zmk_app: Path):
+    return (
         ["west", "update"],
         ["west", "zephyr-export"],
-    ]:
-        action = "would run" if dry_run else "run"
-        logger.debug(f"{action} `{subprocess.list2cmdline(west_update_cmd)}`")
-        if not dry_run:
-            subprocess.check_call(west_update_cmd, cwd=zmk_app, text=True)
+    )
 
 
 def west_build_command(

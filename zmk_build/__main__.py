@@ -14,11 +14,11 @@ from typing import Iterable, Sequence
 from .argparse_dataclass import ArgparseMixin, arg_field
 from .zmk import (
     CompilationItem,
-    check_west_setup,
-    run_west_setup,
-    run_west_update,
+    check_west_setup_command,
     sanitize_bin_name,
     west_build_command,
+    west_setup_command,
+    west_update_commands,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,14 +49,22 @@ def main(argv: list[str] | None = None):
         level=logging.DEBUG if MISC.verbose else logging.INFO, format="%(message)s"
     )
 
-    if not check_west_setup(DIRS.zmk_app):
+    if not try_command(check_west_setup_command(DIRS.zmk_app), zmk_app=DIRS.zmk_app):
         logger.log(
             logging.DEBUG if MISC.dry_run else logging.WARNING, "need to initalize west"
         )
-        run_west_setup(DIRS.zmk_app, dry_run=MISC.dry_run)
-        run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
+        run_command(
+            west_setup_command(DIRS.zmk_app),
+            *west_update_commands(DIRS.zmk_app),
+            zmk_app=DIRS.zmk_app,
+            dry_run=MISC.dry_run,
+        )
     elif MISC.update_west:
-        run_west_update(DIRS.zmk_app, dry_run=MISC.dry_run)
+        run_command(
+            *west_update_commands(DIRS.zmk_app),
+            zmk_app=DIRS.zmk_app,
+            dry_run=MISC.dry_run,
+        )
 
     extra_west_args, extra_cmake_args = FW_OPTS.args()
     for unknown_arg in unknown_args:
@@ -90,7 +98,7 @@ def main(argv: list[str] | None = None):
         build_dir = DIRS.build / join(
             [item.zmk_shield, item.zmk_board, build_hash], "-"
         )
-        tmp_bin_name = item.filename(alias=ARTEFACTS.name)
+        tmp_bin_name = sanitize_bin_name(item.filename(alias=ARTEFACTS.name))
         final_bin_name = item.filename(tag=str(FW_OPTS), alias=ARTEFACTS.name)
         final_bin_name = sanitize_bin_name(final_bin_name)
 
@@ -111,14 +119,11 @@ def main(argv: list[str] | None = None):
             extra_args=extra_west_args,
             extra_cmake_args=extra_cmake_args,
         )
-        action = "would run" if MISC.dry_run else "run"
-        logger.info(f"{action} `{subprocess.list2cmdline(west_build_cmd)}`")
-        if not MISC.dry_run:
-            try:
-                subprocess.check_call(west_build_cmd, cwd=DIRS.zmk_app, text=True)
-            except subprocess.CalledProcessError as e:
-                logger.error("build failed")
-                return e.returncode
+        try:
+            run_command(west_build_cmd, zmk_app=DIRS.zmk_app, dry_run=MISC.dry_run)
+        except subprocess.CalledProcessError as e:
+            logger.error("build failed")
+            return e.returncode
 
         for ext in ARTEFACTS.extensions:
             temp_output = build_dir / "zephyr" / f"{tmp_bin_name}.{ext}"
@@ -131,6 +136,33 @@ def main(argv: list[str] | None = None):
                     shutil.copy(temp_output, final_output)
                 else:
                     logger.warning(f"`{temp_output}` is not a file")
+
+
+def run_command(
+    *commands: Sequence[str], zmk_app: Path, dry_run: bool = False, quiet: bool = False
+):
+    action = "would run" if dry_run else "run"
+    for command in commands:
+        logger.log(
+            logging.INFO if dry_run else logging.DEBUG,
+            f"{action} `{subprocess.list2cmdline(command)}`",
+        )
+        if not dry_run:
+            subprocess.check_call(
+                command,
+                cwd=zmk_app,
+                text=True,
+                stdout=subprocess.DEVNULL if quiet else None,
+                stderr=subprocess.DEVNULL if quiet else None,
+            )
+
+
+def try_command(command: Sequence[str], zmk_app: Path, dry_run: bool = False):
+    try:
+        run_command(command, zmk_app=zmk_app, dry_run=dry_run, quiet=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
 @dataclass(frozen=True)
