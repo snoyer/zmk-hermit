@@ -314,70 +314,72 @@ class FwOptions(ArgparseMixin):
         "--with-pointing", help="set CONFIG_ZMK_POINTING"
     )
 
+    def __iter__(self):
+        def yn(b: bool | None):
+            return None if b is None else "y" if b else "n"
+
+        if v := yn(self.logging):
+            yield FwOption(
+                f"logging={v}",
+                f"-DCONFIG_ZMK_USB_LOGGING={v}",
+                "-S=zmk-usb-logging" if self.logging else (),
+            )
+        if v := yn(self.usb):
+            yield FwOption(f"usb={v}", f"-DCONFIG_ZMK_USB={v}")
+        if v := yn(self.ble):
+            yield FwOption(f"ble={v}", f"-DCONFIG_ZMK_BLE={v}")
+        if (v := self.max_bt) is not None:
+            yield FwOption(
+                f"max-bt={v}",
+                (f"-DCONFIG_BT_MAX_PAIRED={v}", f"-DCONFIG_BT_MAX_CONN={v}"),
+            )
+        if v := self.kb_name:
+            escaped_var = v.replace('"', '\\"')
+            escaped_str = re.sub(r"[/\\]", "_", v)
+            yield FwOption(
+                f"name={escaped_str}", f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_var}"'
+            )
+        if v := yn(self.studio):
+            yield FwOption(
+                f"studio={v}",
+                f"-DCONFIG_ZMK_STUDIO={v}",
+                "-S=studio-rpc-usb-uart" if self.studio else (),
+            )
+        if v := yn(self.split_battery):
+            yield FwOption(
+                f"split-battery={v}",
+                (
+                    f"-DCONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY={v}",
+                    f"-DCONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING={v}",
+                ),
+            )
+        if v := yn(self.pointing):
+            yield FwOption(f"pointing={v}", f"-DCONFIG_ZMK_POINTING={v}")
+
     def __bool__(self):
-        west_args, cmake_args = self.args()
-        return any(cmake_args) or any(west_args)
+        return any(self)
 
     def args(self):
         west_args: list[str] = []
         cmake_args: list[str] = []
 
-        def yn(b: bool):
-            return "y" if b else "n"
+        for opt in self:
+            west_args += opt.west_args
+            cmake_args += opt.cmake_args
 
-        if self.logging is not None:
-            if self.logging:
-                west_args += ("-S=zmk-usb-logging",)
-            cmake_args += (f"-DCONFIG_ZMK_USB_LOGGING={yn(self.logging)}",)
-        if self.usb is not None:
-            cmake_args += (f"-DCONFIG_ZMK_USB={yn(self.usb)}",)
-        if self.ble is not None:
-            cmake_args += (f"-DCONFIG_ZMK_BLE={yn(self.ble)}",)
-        if self.max_bt:
-            cmake_args += (
-                f"-DCONFIG_BT_MAX_PAIRED={self.max_bt}",
-                f"-DCONFIG_BT_MAX_CONN={self.max_bt}",
-            )
-        if self.kb_name:
-            escaped_kb_name = self.kb_name.replace('"', '\\"')
-            cmake_args += (f'-DCONFIG_ZMK_KEYBOARD_NAME="{escaped_kb_name}"',)
-        if self.studio is not None:
-            if self.studio:
-                west_args += ("-S=studio-rpc-usb-uart",)
-            cmake_args += (f"-DCONFIG_ZMK_STUDIO={yn(self.studio)}",)
-        if self.split_battery is not None:
-            cmake_args += (
-                f"-DCONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY={yn(self.split_battery)}",
-                f"-DCONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING={yn(self.split_battery)}",
-            )
-        if self.pointing is not None:
-            cmake_args += (f"-DCONFIG_ZMK_POINTING={yn(self.pointing)}",)
         return west_args, cmake_args
 
     def __str__(self):
-        def parts():
-            def yn(b: bool):
-                return "y" if b else "n"
+        return ",".join(opt.name for opt in self)
 
-            if self.studio is not None:
-                yield f"studio={yn(self.studio)}"
-            if self.split_battery is not None:
-                yield f"split-battery={yn(self.split_battery)}"
-            if self.pointing is not None:
-                yield f"pointing={yn(self.pointing)}"
-            if self.logging is not None:
-                yield f"logging={yn(self.logging)}"
-            if self.usb is not None:
-                yield f"usb={yn(self.usb)}"
-            if self.ble is not None:
-                yield f"ble={yn(self.ble)}"
-            if self.max_bt:
-                yield f"max-bt={self.max_bt}"
-            if self.kb_name:
-                esc_kb_name = re.sub(r"[/\\]", "_", self.kb_name)
-                yield f"name={esc_kb_name}"
 
-        return ",".join(parts())
+class FwOption:
+    def __init__(
+        self, name: str, cmake: str | Iterable[str] = (), west: str | Iterable[str] = ()
+    ) -> None:
+        self.name = name
+        self.cmake_args = (cmake,) if isinstance(cmake, str) else tuple(cmake)
+        self.west_args = (west,) if isinstance(west, str) else tuple(west)
 
 
 @dataclass(frozen=True)
