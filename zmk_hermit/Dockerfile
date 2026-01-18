@@ -1,6 +1,8 @@
 ARG ZMK_IMAGE
 FROM $ZMK_IMAGE
 
+RUN apt-get update && apt-get install -y imagemagick
+
 # setup user so we don't have to run as root
 ARG USER=zmkuser
 ARG UID=1000
