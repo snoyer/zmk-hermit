@@ -151,7 +151,9 @@ def west_build_command(
 
 
 def sanitize_bin_name(bin_name: str):
-    return re.sub(r"[/\\]", "_", bin_name)
+    bin_name= re.sub(r"//zmk", "", bin_name)
+    bin_name= re.sub(r"[/\\]", "_", bin_name)
+    return bin_name
 
 
 def join(parts: Iterable[str | None], sep: str) -> str:
