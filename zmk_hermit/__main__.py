@@ -64,7 +64,8 @@ def main():
             zmk_args,
             extra_args,
             security_opt=parsed_args.docker_security_opt,
-            verbose=parsed_args.verbose > 1,
+            verbose=parsed_args.verbose > 0,
+            verbose_docker=parsed_args.verbose > 1,
         )
     except ValueError as e:
         logger.error(f"error: {e}")
@@ -80,6 +81,7 @@ def run_build(
     extra_args: Sequence[str],
     security_opt: str | None = None,
     verbose: bool = False,
+    verbose_docker: bool = False,
 ):
     volumes = Volumes()
 
@@ -205,7 +207,7 @@ def run_build(
         volumes=volumes,
         tag="zmk-hermit",
         security_opt=[security_opt] if security_opt else None,
-        verbose=verbose,
+        verbose=verbose_docker,
     )
 
     if not exit_code and out_args.into:
