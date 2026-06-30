@@ -63,6 +63,7 @@ def run_in_container(
                 logger.debug(f"  using `{path}` as `{bind}` ({mode})")
         logger.debug(f"  with args: {subprocess.list2cmdline(container_args)}")
 
+    status_code = -1
     container = client.containers.run(
         image=image_id,
         command=list(map(str, container_args)),
@@ -80,11 +81,11 @@ def run_in_container(
             out.flush()
     finally:
         container.stop(timeout=1)
-        status_code = int(container.wait().get("StatusCode", -1))
+        status_code = int(container.wait().get("StatusCode", status_code))
         container.remove()
         logger.debug("removed container.")
 
-        return status_code
+    return status_code
 
 
 def find_conflicts(volumes: VolumesMapping):
