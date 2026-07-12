@@ -26,7 +26,7 @@ ZMK_HOME = ZMKUSER_HOME / "zmk"
 ZMK_CONFIG = Path("/zmk-config")
 ZMK_MODULES = Path("/zmk-modules")
 ARTEFACTS = Path("/artefacts")
-BUILD = Path("/tmp/zmk-build")
+BUILD = Path(tempfile.gettempdir()) / "zmk-build"
 DIR = Path(__file__).parent
 
 
@@ -86,15 +86,14 @@ def run_build(
     volumes = Volumes()
 
     if kb_args.zmk_config:
-        zmk_config_path = Path(kb_args.zmk_config).expanduser()
-        if zmk_config_path.is_dir():
+        if zmk_config_path := check_directory(kb_args.zmk_config):
             volumes[ZMK_CONFIG] = zmk_config_path, "ro"
         else:
             raise ValueError("zmk-config must be a directory")
 
     shield_names: list[str] = []
     for shield in kb_args.shields:
-        shield_path = Path(shield).expanduser()
+        shield_path = expand_path(shield)
         if shield_path.is_file() or shield_path.is_dir():
             primary_shield_name = guess_shield_name(shield_path)
             logger.info(
@@ -110,15 +109,14 @@ def run_build(
             shield_names.append(str(shield))
 
     if kb_args.board:
-        board_path = Path(kb_args.board).expanduser()
-        if board_path.is_dir():
+        if board_path := check_directory(kb_args.board):
             board_name = guess_board_name(board_path)
             board_type = guess_board_type(board_path)
             logger.info(
                 f"guessed board name `{board_name}` ({board_type}) from `{board_path}`"
             )
             volumes[ZMK_CONFIG / "boards" / board_type / board_name] = board_path, "ro"
-        elif board_path.is_file():
+        elif board_path and check_file(board_path):
             raise ValueError("out-of-tree board must be a directory")
         else:
             board_name = str(kb_args.board)
@@ -128,8 +126,7 @@ def run_build(
     primary_shield_name = shield_names[0] if shield_names else None
 
     if kb_args.keymap:
-        keymap_path = Path(kb_args.keymap).expanduser()
-        if keymap_path.is_file():
+        if keymap_path := check_file(kb_args.keymap):
             keymap_name = keymap_path.stem
             if keymap_name in (primary_shield_name, board_name):
                 keymap_name = None
@@ -146,25 +143,26 @@ def run_build(
     output_basename = join([primary_shield_name, board_name, keymap_name], "-")
 
     if out_args.into:
-        into_path = Path(out_args.into).expanduser()
-        if into_path.is_dir():
+        if into_path := check_directory(out_args.into):
             volumes[ARTEFACTS] = into_path, "rw"
         else:
             raise ValueError("output directory not a directory")
 
     extra_modules: list[Path] = []
     if zmk_args.modules:
-        for module_dir in map(Path, zmk_args.modules):
-            if module_dir.is_dir():
+        for module_dir_arg in zmk_args.modules:
+            if module_dir := check_directory(module_dir_arg):
                 module_dir_inside = ZMK_MODULES / module_dir.name
                 volumes[module_dir_inside] = module_dir, "ro"
                 extra_modules.append(module_dir_inside)
             else:
-                raise ValueError(f"module directory {module_dir} is not a directory")
+                raise ValueError(
+                    f"module directory {module_dir_arg} is not a directory"
+                )
 
     if zmk_args.build_dir:
-        if zmk_args.build_dir.is_dir():
-            volumes[BUILD] = zmk_args.build_dir, "rw"
+        if build_dir := check_directory(zmk_args.build_dir):
+            volumes[BUILD] = build_dir, "rw"
         else:
             raise ValueError(f"build directory {zmk_args.build_dir} is not a directory")
 
@@ -172,8 +170,8 @@ def run_build(
     volumes[ZMKUSER_HOME / "py_zmk_build"] = py_module_dir, "ro"
     build_script = "python3", "-m", "py_zmk_build"
 
-    if zmk_args.zmk_src and Path(zmk_args.zmk_src).is_dir():
-        volumes[ZMK_HOME] = Path(zmk_args.zmk_src).expanduser(), "rw"
+    if zmk_src := check_directory(zmk_args.zmk_src):
+        volumes[ZMK_HOME] = zmk_src, "rw"
         image_args = docker_image_args(zmk_args.zmk_image)
     else:
         raise ValueError(f"source directory {zmk_args.zmk_src} is not a directory")
@@ -211,7 +209,7 @@ def run_build(
     )
 
     if not exit_code and out_args.into:
-        into_path = Path(out_args.into).expanduser()
+        into_path = expand_path(out_args.into)
         for fn in into_path.glob(f"{output_basename}*.*"):
             if (
                 fn.suffix.lstrip(".") in out_args.extensions
@@ -239,7 +237,9 @@ class KbArgs(ArgparseMixin):
     keymap: str | None = arg_field(
         "--keymap", metavar="FILE", help="out-of-tree keymap file"
     )
-    zmk_config: Path = arg_field("--zmk-config", metavar="DIR", help="ZMK-config dir")
+    zmk_config: Path | None = arg_field(
+        "--zmk-config", metavar="DIR", help="ZMK-config dir"
+    )
 
 
 @dataclass
@@ -296,6 +296,20 @@ def docker_image_args(zmk_image: str):
 
 def join(parts: Iterable[str | None], sep: str):
     return sep.join(filter(None, parts))
+
+
+def check_directory(path: Path | str):
+    fixed_path = expand_path(path)
+    return fixed_path if fixed_path.is_dir() else None
+
+
+def check_file(path: Path | str):
+    fixed_path = expand_path(path)
+    return fixed_path if fixed_path.is_file() else None
+
+
+def expand_path(path: Path | str):
+    return Path(path).expanduser()
 
 
 if __name__ == "__main__":
